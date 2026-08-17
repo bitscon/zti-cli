@@ -1,0 +1,46 @@
+# ZTI Tier-3 required check (ADR-0004 §6) — the merge-time receipt-gate.
+#
+# Copy this file into .github/workflows/ of the GOVERNED repo, then mark the
+# "zti-verify" job as a required status check in branch protection — that is
+# what turns a local `git commit --no-verify` bypass into a failed merge.
+#
+# Repo secrets:
+#   ZTI_PLANE_URL   URL of your ZTI Core plane, reachable from CI runners
+#   ZTI_GATE_ID     a gate id registered on that plane
+#   ZTI_GATE_KEY    that gate's bearer key (used verify-only in CI; receipts
+#                   are minted on the developer's machine, never here)
+#
+# The zti CLI is open source: https://github.com/bitscon/zti-cli
+# Install it from the repo as below, from PyPI once published there, or vendor
+# the wheel at .zti/zti-*.whl on your internal package index.
+#
+# Fail-closed by design: no receipt, a non-passing receipt, an unreachable
+# plane, and a license-locked plane all exit nonzero and fail this check.
+
+name: zti-verify
+on:
+  pull_request:
+
+jobs:
+  zti-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Verify the PR HEAD — the exact tree the developer's machine minted
+          # a receipt for — never the ephemeral merge commit.
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the zti CLI
+        run: pip install "zti @ git+https://github.com/bitscon/zti-cli"
+
+      - name: Verify a passing receipt exists for exactly this content
+        env:
+          ZTI_PLANE_URL: ${{ secrets.ZTI_PLANE_URL }}
+          ZTI_GATE_ID: ${{ secrets.ZTI_GATE_ID }}
+          ZTI_GATE_KEY: ${{ secrets.ZTI_GATE_KEY }}
+        run: zti verify ${{ github.event.pull_request.head.sha }}

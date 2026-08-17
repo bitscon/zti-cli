@@ -1,0 +1,40 @@
+# Packaging for the open ZTI client gate layer: the `zti` CLI plus the gate
+# library it mints receipts with (ADR-0004 §8, ADR-0009). MIT, see LICENSE.
+# The ZTI Core control plane is a separate closed product; nothing here
+# depends on its code.
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "zti"
+version = "0.1.0"
+description = "ZTI client gate layer — receipt-gated commits and merges for AI coding agents (zti receipt / verify / install-hooks)"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Chad McCormack", email = "info@bitscon.net" }]
+# The open ZTIP runtime (canonicalization + envelope hashing), pre-release on
+# PyPI; the pre-release specifier lets pip resolve it without --pre.
+dependencies = ["ztip>=1.0.0.dev1"]
+keywords = ["coding-agents", "verification", "receipts", "ci", "devsecops", "claude-code", "git-hooks", "pre-commit"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: System Administrators",
+  "Environment :: Console",
+  "Topic :: Software Development :: Testing",
+  "Topic :: Software Development :: Version Control :: Git",
+]
+
+[project.urls]
+Homepage = "https://zerotrustintelligence.io"
+Repository = "https://github.com/bitscon/zti-cli"
+
+[project.scripts]
+zti = "zticli.main:main"
+
+[tool.hatch.build.targets.wheel]
+# The CLI plus the gate library. The Claude Code hook pair ships in the repo
+# (hooks/claude-code/), installed by copying it, not via the wheel.
+packages = ["zticli", "ztipgate"]

@@ -1,0 +1,8 @@
+#!/bin/sh
+# ZTI Tier-2 receipt-gate (ADR-0004 §5) — installed by `zti install-hooks`.
+#
+# A commit is allowed only when the plane holds a passing, hash-verified ZTIP
+# receipt for exactly the staged content (git write-tree). Fail-closed: no
+# receipt, a failed receipt, or an unreachable/license-locked plane all block.
+# Mint one with:  zti receipt
+exec zti verify --staged
