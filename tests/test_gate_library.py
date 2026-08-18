@@ -234,8 +234,8 @@ def test_no_real_checks_never_reads_as_verified(checks):
     assert reason == "NO_CHECKS_DEFINED"
     assert results == [] and called == []          # no check runner invoked on blanks
     receipt = g.issue_receipt("succeeded", accepted, results, reason)
-    assert receipt["status"] == "blocked"          # not "succeeded"
-    assert "NO_CHECKS_DEFINED" in receipt["reason_codes"]
+    assert receipt["status"] == "failed"           # not "succeeded" (spec vocabulary, ADR-0010)
+    assert "zti.gate/NO_CHECKS_DEFINED" in receipt["reason_codes"]
 
 
 def test_blank_check_entries_are_skipped_but_real_ones_run():

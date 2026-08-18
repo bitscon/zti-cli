@@ -31,6 +31,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import stat
@@ -40,7 +41,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from ztipgate.gate import Contract, Gate
+from ztipgate.gate import (Contract, Gate, build_authorization_decision,
+                           build_transaction_request)
 
 PASS, RECEIPT_NOT_PASSED, DONE_WITHOUT_RECEIPT, PLANE_UNAVAILABLE, USAGE = 0, 1, 2, 3, 4
 DEFAULT_PLANE = "http://127.0.0.1:8100"
@@ -126,9 +128,16 @@ class Plane:
     def get_policy(self, gate_id: str) -> tuple[int, dict]:
         return self._request("GET", f"/v1/gates/{gate_id}/policy")
 
-    def ship_receipt(self, gate_id: str, receipt: dict, binding: dict) -> tuple[int, dict]:
-        return self._request("POST", f"/v1/gates/{gate_id}/receipts",
-                             {"receipt": receipt, "binding": binding})
+    def ship_receipt(self, gate_id: str, receipt: dict, binding: dict,
+                     request: dict | None = None,
+                     authorization: dict | None = None) -> tuple[int, dict]:
+        body = {"receipt": receipt, "binding": binding}
+        if request is not None:
+            # The ADR-0010 chain: the request + authorization envelopes travel
+            # with the receipt so the plane can store the provable chain.
+            body["request"] = request
+            body["authorization"] = authorization
+        return self._request("POST", f"/v1/gates/{gate_id}/receipts", body)
 
     def verify_by_tree(self, tree: str) -> tuple[int, dict]:
         return self._request("GET", f"/v1/verify/by-tree/{tree}")
@@ -185,22 +194,36 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
 # ── zti receipt ──────────────────────────────────────────────────────────────
 
+def _contract_ref(spec: dict) -> str:
+    """The honest local policy basis: the contract's own content hash, derived
+    exactly as the plane derives a policy etag (sha256 over sort_keys JSON) but
+    kept full-length."""
+    body = json.dumps(spec, sort_keys=True)
+    return "contract:sha256:" + hashlib.sha256(body.encode()).hexdigest()
+
+
 def _load_contract(args, plane_url: str, gate_id: str | None, key: str | None,
-                   root: Path) -> dict:
+                   root: Path) -> tuple[dict, str]:
     """Contract source order: --contract file > plane policy > .zti/contract.json.
-    No contract → error (fail-closed: nothing to verify against means no receipt)."""
+    No contract → error (fail-closed: nothing to verify against means no receipt).
+    Returns (contract, policy_ref) — the policy_ref names what authorized this
+    work for the ADR-0010 authorization decision: the plane's policy etag when
+    the contract came from the plane, else the contract's own content hash."""
     if args.contract:
-        return json.loads(Path(args.contract).read_text())
+        spec = json.loads(Path(args.contract).read_text())
+        return spec, _contract_ref(spec)
     if gate_id and key:
         try:
             status, body = Plane(plane_url, key).get_policy(gate_id)
             if status == 200 and "contract" in body:
-                return body["contract"]
+                return body["contract"], (
+                    f"zti-core:gates/{gate_id}/policy@{body.get('etag', 'unknown')}")
         except PlaneUnavailable:
             pass  # fall through to the local file — mint offline, verify later
     local = root / ".zti" / "contract.json"
     if local.exists():
-        return json.loads(local.read_text())
+        spec = json.loads(local.read_text())
+        return spec, _contract_ref(spec)
     raise RuntimeError("no contract: give --contract, configure the plane policy, "
                        "or create .zti/contract.json")
 
@@ -229,7 +252,7 @@ def cmd_receipt(args: argparse.Namespace) -> int:
               "or .zti/config.json + .zti/gate.key)", file=sys.stderr)
         return USAGE
     try:
-        spec = _load_contract(args, plane_url, gate_id, key, root)
+        spec, policy_ref = _load_contract(args, plane_url, gate_id, key, root)
     except (RuntimeError, OSError, json.JSONDecodeError) as exc:
         print(f"zti receipt: {exc}", file=sys.stderr)
         return USAGE
@@ -243,16 +266,25 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         forbidden_paths=list(spec.get("forbidden_paths", [])),
         required_checks=list(spec.get("required_checks", [])),
     )
+    # The ADR-0010 chain: declare the unit of work and its policy basis BEFORE
+    # the checks run, so the receipt can bind to the request it answers.
+    request = build_transaction_request(
+        contract, repo=root.name, gate_id=gate_id,
+        parameters={"repo": root.name, "tree_hash": tree})
+    authorization = build_authorization_decision(
+        request, policy_ref=policy_ref, gate_id=gate_id)
     gate = Gate(contract)
     print(f"zti receipt: verifying {len(contract.required_checks)} required check(s) "
           f"for tree {tree[:12]} (independent re-run — the agent's word is not input)")
     accepted, results, reason = gate.verify_completion(
         "succeeded", lambda check: _run_check(check, root))
-    receipt = gate.issue_receipt("succeeded", accepted, results, reason)
+    receipt = gate.issue_receipt("succeeded", accepted, results, reason,
+                                 request=request, authorization=authorization)
 
     try:
         status, body = Plane(plane_url, key).ship_receipt(
-            gate_id, receipt, {"tree_hash": tree})
+            gate_id, receipt, {"tree_hash": tree},
+            request=request, authorization=authorization)
     except PlaneUnavailable as exc:
         print(f"zti receipt: plane unreachable ({exc}) — receipt NOT shipped; "
               f"commits will stay blocked until it is", file=sys.stderr)
@@ -262,10 +294,12 @@ def cmd_receipt(args: argparse.Namespace) -> int:
               f"{body.get('reason', '')}) — failing closed", file=sys.stderr)
         return PLANE_UNAVAILABLE
 
-    verdict = receipt["status"]
-    print(f"zti receipt: {verdict.upper()} — receipt {body['receipt_id']} bound to "
-          f"tree {tree[:12]} ({'commit will pass' if verdict == 'succeeded' else 'commit stays blocked'})")
-    return PASS if verdict == "succeeded" else RECEIPT_NOT_PASSED
+    # The human verdict word is the gate's (BLOCKED); the receipt's wire status
+    # is the spec's ("failed") — same fact, two vocabularies (ADR-0010).
+    verdict = "SUCCEEDED" if accepted else "BLOCKED"
+    print(f"zti receipt: {verdict} — receipt {body['receipt_id']} bound to "
+          f"tree {tree[:12]} ({'commit will pass' if accepted else 'commit stays blocked'})")
+    return PASS if accepted else RECEIPT_NOT_PASSED
 
 
 # ── zti install-hooks ────────────────────────────────────────────────────────
