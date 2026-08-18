@@ -1,0 +1,32 @@
+name: publish
+
+# Manual-dispatch only. Publishing is an irreversible operator action; this
+# workflow never runs on push or tag. It uses PyPI Trusted Publishing (OIDC),
+# so no API token is stored anywhere: PyPI must list this repo + this workflow
+# as a trusted publisher for the project before the first run. The same
+# workflow serves either project name (zti on the name grant, or the zti-cli
+# fallback) because the repo-to-project binding lives on the PyPI side.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write  # required for PyPI Trusted Publishing (OIDC)
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Build sdist and wheel
+        run: |
+          pip install build
+          rm -rf dist/
+          python -m build
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
