@@ -13,7 +13,7 @@ version = "0.1.0"
 description = "ZTI client gate layer — receipt-gated commits and merges for AI coding agents (zti receipt / verify / install-hooks)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = "MIT"
 authors = [{ name = "Chad McCormack", email = "info@bitscon.net" }]
 # The open ZTIP runtime (canonicalization + envelope hashing), pre-release on
 # PyPI; the pre-release specifier lets pip resolve it without --pre.
