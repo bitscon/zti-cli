@@ -1,5 +1,8 @@
 # zti: the Verified Done gate for AI coding agents
 
+[![CI](https://img.shields.io/github/actions/workflow/status/bitscon/zti-cli/ci.yml?branch=main&label=ci)](https://github.com/bitscon/zti-cli/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-f97316)](LICENSE)
+
 Your agent says the work is done. `zti` proves it. It re-runs the required
 checks itself, seals the result in a hash-chained [ZTIP](https://github.com/bitscon/ztip)
 receipt bound to the exact git tree, and blocks the commit or merge when no
@@ -94,9 +97,12 @@ Then wire the hook in the governed repo's `.claude/settings.json`:
 
 ## What you need to run it
 
-A ZTI Core plane. Every ZTI Core install includes a free 30-day trial with
-full functionality, and ZTI Core is free for individuals on the honor system.
-Organizations license it per year. Details: [zerotrustintelligence.io](https://zerotrustintelligence.io).
+A ZTI Core plane. ZTI Core is complete and in early access. Every install
+includes a free 30-day trial with full functionality, and individual use is
+free on the honor system. Organizations license it per year; pricing is
+announced at launch. Start at
+[licensing@zerotrustintelligence.io](mailto:licensing@zerotrustintelligence.io)
+or [zerotrustintelligence.io](https://zerotrustintelligence.io).
 
 The protocol underneath is open: [ZTIP](https://github.com/bitscon/ztip),
 MIT, with its own spec, schemas, and reference runtime.
