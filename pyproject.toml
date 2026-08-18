@@ -11,6 +11,7 @@ build-backend = "hatchling.build"
 name = "zti"
 version = "0.1.0"
 description = "ZTI client gate layer — receipt-gated commits and merges for AI coding agents (zti receipt / verify / install-hooks)"
+readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Chad McCormack", email = "info@bitscon.net" }]
