@@ -10,6 +10,9 @@
     workflow as a trusted publisher on PyPI; never fires on push or tag. The
     same workflow serves either project name (`zti` on the name grant, or the
     `zti-cli` fallback) because the repo-to-project binding lives on PyPI.
+  - New `docs/RELEASING.md`: the release runbook — Trusted Publishing setup,
+    twine fallback, the name-request/fallback story, and the alias-package
+    ("claim `zti-cli`") rationale with a self-contained regeneration script.
   - No tracked source changed. `zticli/` and `ztipgate/` byte-untouched.
   - Untracked build output (gitignored `dist/`): `zti-0.1.0` sdist + wheel
     rebuilt from today's tree so the PyPI long description is the current
