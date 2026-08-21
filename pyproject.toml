@@ -8,7 +8,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "zti"
+# PyPI name (decided 2026-08-20; the `zti` name request, pypi/support#11900,
+# stays open — see docs/RELEASING.md). The installed command stays `zti`.
+name = "zti-cli"
 version = "0.1.0"
 description = "ZTI client gate layer — receipt-gated commits and merges for AI coding agents (zti receipt / verify / install-hooks)"
 readme = "README.md"

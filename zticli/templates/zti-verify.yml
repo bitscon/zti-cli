@@ -36,7 +36,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install the zti CLI
-        run: pip install "zti @ git+https://github.com/bitscon/zti-cli"
+        run: pip install "zti-cli @ git+https://github.com/bitscon/zti-cli"
 
       - name: Verify a passing receipt exists for exactly this content
         env:

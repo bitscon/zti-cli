@@ -35,8 +35,10 @@ human or agent, by git content alone.
 ## Install
 
 ```bash
-pip install "zti @ git+https://github.com/bitscon/zti-cli"
+pip install zti-cli
 ```
+
+The package is `zti-cli`; the command it installs is `zti`.
 
 Point it at your plane with `.zti/config.json` in the repo
 (`{"plane_url": "...", "gate_id": "..."}`) plus the gate key in
