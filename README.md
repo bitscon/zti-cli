@@ -1,6 +1,7 @@
 # zti: the Verified Done gate for AI coding agents
 
 [![CI](https://img.shields.io/github/actions/workflow/status/bitscon/zti-cli/ci.yml?branch=main&label=ci)](https://github.com/bitscon/zti-cli/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/zti-cli?label=pypi)](https://pypi.org/project/zti-cli/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-f97316)](LICENSE)
 
 Your agent says the work is done. `zti` proves it. It re-runs the required
