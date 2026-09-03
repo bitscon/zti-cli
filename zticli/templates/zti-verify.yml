@@ -3,6 +3,7 @@
 # Copy this file into .github/workflows/ of the GOVERNED repo, then mark the
 # "zti-verify" job as a required status check in branch protection — that is
 # what turns a local `git commit --no-verify` bypass into a failed merge.
+# Full wiring steps: docs/ENFORCEMENT-TIERS.md in the ZTI Core delivery.
 #
 # Repo secrets:
 #   ZTI_PLANE_URL   URL of your ZTI Core plane, reachable from CI runners
@@ -10,12 +11,22 @@
 #   ZTI_GATE_KEY    that gate's bearer key (used verify-only in CI; receipts
 #                   are minted on the developer's machine, never here)
 #
-# The zti CLI is open source: https://github.com/bitscon/zti-cli
-# Install it from the repo as below, from PyPI once published there, or vendor
-# the wheel at .zti/zti-*.whl on your internal package index.
+# The zti CLI is open source (https://github.com/bitscon/zti-cli) and published
+# on PyPI as `zti-cli`. It is installed here from PyPI, pinned to an exact
+# version AND artifact hash — NEVER from a file inside the repo it checks, and
+# never from an unpinned git ref. That is deliberate: a governed PR must not be
+# able to vendor a stub "zti" wheel that passes its own gate, and an unpinned
+# ref would let the verifier change under you. Pins below are the published
+# 0.1.0 release; regenerate on a version bump:
+#   pip download --no-deps zti-cli==<v> ztip==<v> && sha256sum *.whl
+#
+#   Residual: a PR that also edits THIS workflow file could repoint the
+#   install. Close that GitHub-side by marking zti-verify a required workflow
+#   / branch-protection ruleset — repo owner config, not settable from the repo.
 #
 # Fail-closed by design: no receipt, a non-passing receipt, an unreachable
-# plane, and a license-locked plane all exit nonzero and fail this check.
+# plane, an unreachable index, and a license-locked plane all exit nonzero and
+# fail this check.
 
 name: zti-verify
 on:
@@ -35,8 +46,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install the zti CLI
-        run: pip install "zti-cli @ git+https://github.com/bitscon/zti-cli"
+      - name: Install the zti verifier — pinned, from PyPI, OUTSIDE the tree under test
+        run: |
+          printf '%s\n' \
+            'zti-cli==0.1.0 --hash=sha256:3316ba91340476841bd6f6bd20e57f597c1292fe03fe0c6a8b603604f71f3a17' \
+            'ztip==1.0.0.dev2 --hash=sha256:4767a57369ff66289056336f51959a9e9997d0db3b646326d3491bcf8ecb1ac9' \
+            > "$RUNNER_TEMP/zti-verifier.lock"
+          pip install --require-hashes --no-deps -r "$RUNNER_TEMP/zti-verifier.lock"
 
       - name: Verify a passing receipt exists for exactly this content
         env:
