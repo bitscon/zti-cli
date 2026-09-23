@@ -1,3 +1,5 @@
+> **Read `ESTATE.md` first** - it says where this repository lives and which law applies here.
+
 # AGENTS
 
 Rules for any coding agent working in this repository.
