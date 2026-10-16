@@ -162,6 +162,86 @@ def is_irreversible(command: str) -> bool:
     return False
 
 
+# Constant-true check classification (zti:vac-gate). A "check" that always
+# exits 0 while verifying nothing — `true`, `:`, a bare `echo`/`printf`,
+# `exit 0`, or a real command neutered by a trailing `|| true` — produces a
+# named, passing verification result that every honest floor accepts by
+# design. Classifying it is a LINT, not a gate: an operator deliberately
+# publishing a trivial check is exercising their policy right; the classifier
+# exists so tooling can say "this check verifies nothing" out loud (mint-time
+# warning) and so the contract generator never emits one as if it were real.
+# Conservative by design: only commands that are constant-true BY CONSTRUCTION
+# are flagged. Documented limits, mirroring `is_irreversible`: name
+# obfuscation (`sh -c 'true'`, `command true`, `env true`), a script file
+# whose body is trivial, a repo-local tool literally basenamed `true`/`echo`,
+# constant-true compositions other than the final-element rule below
+# (`a || true && b` stays "real" — its exit genuinely follows `b`), and shell
+# options that change pipe semantics (under `set -o pipefail`, `pytest | true`
+# is NOT constant-true — the classifier's segment view does not track shell
+# state, so it treats a trailing pipe-to-no-op as neutralizing; a false
+# positive here only ever WARNS, never blocks or drops silently).
+_NOOP_BARE = frozenset({"true", ":"})       # args ignored, always exit 0
+_NOOP_OUTPUT_ONLY = frozenset({"echo", "printf"})  # print and exit 0 — verify nothing
+
+# Split keeping the operators, so `&&` (the one connector that PRESERVES a
+# failure) is distinguishable from `;`, `|`, `||`, `&`, newline (which all
+# make the final element's exit the command's exit).
+_SHELL_SEP_KEEP = re.compile(r"(&&|\|\||[;&\n]+|\|)")
+
+
+def _noop_segment(toks: list[str]) -> bool:
+    """Is one already-de-quoted, tokenized sub-command constant-true?
+    Basename-matched (`/bin/true` counts), mirroring the irreversibility
+    screen's mechanics."""
+    base = toks[0].rsplit("/", 1)[-1]
+    if base in _NOOP_BARE or base in _NOOP_OUTPUT_ONLY:
+        return True
+    if base == "exit" and (len(toks) == 1 or toks[1] == "0"):
+        return True
+    return base.startswith("#")  # a comment runs nothing
+
+
+def is_noop_check(check: str) -> bool:
+    """Is `check` a constant-true no-op — a command that passes without
+    verifying anything? True also for blank input (nothing runs, nothing is
+    verified). Two ways to qualify:
+
+    * EVERY sub-command is a no-op (`true; echo ok` — while `true && pytest`
+      still verifies);
+    * the FINAL sub-command is a no-op reached by anything but `&&`
+      (`pytest || true`, `pytest | true`, `pytest; true`): `;`/`&` always run
+      it, a pipeline's exit is its last command's, and `||` runs it exactly
+      when the left side failed — all four end at exit 0 unconditionally.
+      Only `&&` preserves the left side's failure, so `pytest && true` stays
+      real.
+
+    Quoted DATA is dropped first so `echo "pytest passed"` classifies on the
+    `echo`."""
+    if not isinstance(check, str) or not check.strip():
+        return True
+    text = _QUOTED_STRING.sub(" ", check[:_MAX_COMMAND_SCAN].replace("\\\n", " "))
+    segments: list[tuple[str | None, list[str]]] = []  # (connector before, tokens)
+    pending_sep: str | None = None
+    for part in _SHELL_SEP_KEEP.split(text):
+        if not part:
+            continue
+        if _SHELL_SEP_KEEP.fullmatch(part):
+            pending_sep = "&&" if part == "&&" else part
+            continue
+        toks = part.split()
+        if toks:
+            segments.append((pending_sep, toks))
+            pending_sep = None
+    if not segments:
+        # Nothing but quoted DATA survived the strip (e.g. check == '""') —
+        # constant-true either way.
+        return True
+    if all(_noop_segment(toks) for _, toks in segments):
+        return True
+    last_sep, last_toks = segments[-1]
+    return last_sep is not None and last_sep != "&&" and _noop_segment(last_toks)
+
+
 @dataclass
 class Contract:
     """What a unit of work may touch and what must be true for it to be 'done'."""
@@ -536,6 +616,35 @@ class Gate:
         self._record(action, decision)
         return decision
 
+    def record_release(self, action: dict,
+                       detail: str = "released once by operator approval") -> Decision:
+        """An operator approved this exact action; record that it was performed.
+
+        The gate blocked the action, a human released it, and the agent then
+        carried it out. Leaving it in `blocked` would put a performed action
+        under the receipt's `actions_blocked` and carry its deny reason code —
+        the receipt asserting a block that did not happen, which is the same
+        defect class as an approval that releases nothing, one layer down.
+
+        The audit chain keeps BOTH beats: the escalate/deny entry stays, and
+        this appends the release after it, so the tamper-evident record reads
+        honestly rather than pretending the block was never made. Only the most
+        recent matching block is released — one approval, one action.
+
+        The gate does not decide this. It is told, by the plane, that the
+        operator decided it (ADR-0014): the release is authority the gate
+        consumes and never authors.
+        """
+        summary = self._summary(action)
+        for i in range(len(self.blocked) - 1, -1, -1):
+            if self._summary(self.blocked[i][0]) == summary:
+                del self.blocked[i]
+                break
+        self.completed.append(action)
+        decision = Decision(ALLOW, "APPROVAL_RELEASED", detail)
+        self._record(action, decision)
+        return decision
+
     # ── the differentiator: independent completion verification ─────────────
     def verify_completion(
         self, claimed_status: str, check_runner: Callable[[str], bool]
@@ -561,7 +670,12 @@ class Gate:
         real_checks = [c for c in self.contract.required_checks
                        if isinstance(c, str) and c.strip()]
         for i, check in enumerate(real_checks, start=1):
-            entry = {"check_id": f"check-{i}", "check": check, "verifier": "gate-independent"}
+            # check_id + check_type + passed are the spec's required result
+            # fields (a result that names no check certifies nothing);
+            # check_type mirrors the request's verification_requirements entry
+            # this result answers.
+            entry = {"check_id": f"check-{i}", "check_type": "command",
+                     "check": check, "verifier": "gate-independent"}
             try:
                 passed = bool(check_runner(check))
             except Exception as exc:  # verifier could not run this check

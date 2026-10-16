@@ -42,7 +42,8 @@ import urllib.request
 from pathlib import Path
 
 from ztipgate.gate import (Contract, Gate, build_authorization_decision,
-                           build_transaction_request)
+                           build_transaction_request, is_noop_check)
+from ztipgate.transport import PlaneURLRefused, apply_transport
 
 PASS, RECEIPT_NOT_PASSED, DONE_WITHOUT_RECEIPT, PLANE_UNAVAILABLE, USAGE = 0, 1, 2, 3, 4
 DEFAULT_PLANE = "http://127.0.0.1:8100"
@@ -87,6 +88,17 @@ def load_config(root: Path) -> tuple[str, str | None, str | None]:
         except (json.JSONDecodeError, OSError) as exc:
             raise RuntimeError(f"unreadable {cfg_file}: {exc}")
     plane = os.environ.get("ZTI_PLANE_URL") or cfg.get("plane_url") or DEFAULT_PLANE
+    # Transport policy (ADR-0016): plaintext http only to loopback; anything
+    # else needs https or the explicit ZTI_ALLOW_INSECURE_HTTP override.
+    # Raised as RuntimeError so every caller's existing config-error path
+    # reports it and exits USAGE, before the first request. Also installs the
+    # opener: plaintext never rides an environment proxy.
+    try:
+        warning = apply_transport(plane)
+    except PlaneURLRefused as exc:
+        raise RuntimeError(str(exc)) from None
+    if warning:
+        print(f"zti: {warning}", file=sys.stderr)
     gate_id = os.environ.get("ZTI_GATE_ID") or cfg.get("gate_id")
     key = os.environ.get("ZTI_GATE_KEY")
     if not key:
@@ -182,9 +194,17 @@ def cmd_verify(args: argparse.Namespace) -> int:
               f"(tree {tree[:12]})")
         return PASS
     if body.get("receipt_id"):
+        # The plane names WHY the stored receipt is not passing (a floor reason
+        # such as ENFORCEMENT_NOT_CONTINUOUS or NO_CHECK_RESULTS) — surface it,
+        # and aim the advice at the cause instead of blindly at "the work".
+        reason = body.get("reason")
+        why = f" ({reason})" if isinstance(reason, str) and reason else ""
+        advice = (f"Address {reason}, then re-run `zti receipt`."
+                  if isinstance(reason, str) and reason
+                  else "Fix the work, then re-run `zti receipt`.")
         print(f"zti verify: BLOCKED — RECEIPT_NOT_PASSED: receipt {body['receipt_id']} "
-              f"for {target} has status '{body.get('status')}'. Fix the work, then "
-              f"re-run `zti receipt`.", file=sys.stderr)
+              f"for {target} has status '{body.get('status')}'{why}. {advice}",
+              file=sys.stderr)
         return RECEIPT_NOT_PASSED
     print(f"zti verify: BLOCKED — DONE_WITHOUT_RECEIPT: no receipt for {target} "
           f"(tree {tree[:12]}). Run `zti receipt` to verify the work and mint one.",
@@ -204,22 +224,41 @@ def _contract_ref(spec: dict) -> str:
 
 def _load_contract(args, plane_url: str, gate_id: str | None, key: str | None,
                    root: Path) -> tuple[dict, str]:
-    """Contract source order: --contract file > plane policy > .zti/contract.json.
-    No contract → error (fail-closed: nothing to verify against means no receipt).
-    Returns (contract, policy_ref) — the policy_ref names what authorized this
-    work for the ADR-0010 authorization decision: the plane's policy etag when
-    the contract came from the plane, else the contract's own content hash."""
-    if args.contract:
-        spec = json.loads(Path(args.contract).read_text())
-        return spec, _contract_ref(spec)
+    """Contract source order: plane policy > --contract file > .zti/contract.json.
+
+    When the plane publishes a policy for this repo, that policy is the
+    authority (zti:vac-gate): a --contract file may restate it byte-for-byte
+    (offline review copy) but a DIVERGENT local contract is refused — the
+    governed party must not swap the operator's checks for weaker ones and
+    still mint. With no published policy (404) the local file is the honest
+    basis. When the plane is unreachable the local file mints offline — the
+    plane re-applies this same supremacy rule at ship time, so nothing weaker
+    can land. No contract at all → error (fail-closed: nothing to verify
+    against means no receipt). Returns (contract, policy_ref): the plane's
+    policy etag when the policy governs, else the contract's own content hash."""
+    plane_policy = plane_etag = None
     if gate_id and key:
         try:
             status, body = Plane(plane_url, key).get_policy(gate_id)
             if status == 200 and "contract" in body:
-                return body["contract"], (
-                    f"zti-core:gates/{gate_id}/policy@{body.get('etag', 'unknown')}")
+                plane_policy = body["contract"]
+                plane_etag = body.get("etag", "unknown")
         except PlaneUnavailable:
-            pass  # fall through to the local file — mint offline, verify later
+            pass  # mint offline from the local contract; the plane floor governs at ship
+    if args.contract:
+        spec = json.loads(Path(args.contract).read_text())
+        if plane_policy is not None:
+            if json.dumps(spec, sort_keys=True) != json.dumps(plane_policy, sort_keys=True):
+                raise RuntimeError(
+                    f"--contract {args.contract} diverges from the policy the plane "
+                    f"publishes for this repo (etag {plane_etag}). The operator's "
+                    "published policy is the authority — a local contract may not "
+                    "replace it. Mint without --contract to use the plane policy, "
+                    "or have the operator publish the change.")
+            return spec, f"zti-core:gates/{gate_id}/policy@{plane_etag}"
+        return spec, _contract_ref(spec)
+    if plane_policy is not None:
+        return plane_policy, f"zti-core:gates/{gate_id}/policy@{plane_etag}"
     local = root / ".zti" / "contract.json"
     if local.exists():
         spec = json.loads(local.read_text())
@@ -274,6 +313,15 @@ def cmd_receipt(args: argparse.Namespace) -> int:
     authorization = build_authorization_decision(
         request, policy_ref=policy_ref, gate_id=gate_id)
     gate = Gate(contract)
+    # Mint-time lint (zti:vac-gate): say out loud when a required check is a
+    # constant-true no-op. A warning, never a block — a trivial check an
+    # OPERATOR published is their policy choice; the lint exists so nobody
+    # mistakes "this ran and passed" for "this verified something".
+    for check in contract.required_checks:
+        if isinstance(check, str) and check.strip() and is_noop_check(check):
+            print(f"zti receipt: WARNING — required check {check!r} is a "
+                  f"constant-true no-op: it always passes and verifies nothing",
+                  file=sys.stderr)
     print(f"zti receipt: verifying {len(contract.required_checks)} required check(s) "
           f"for tree {tree[:12]} (independent re-run — the agent's word is not input)")
     accepted, results, reason = gate.verify_completion(
@@ -293,6 +341,19 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         print(f"zti receipt: plane refused the receipt ({status} "
               f"{body.get('reason', '')}) — failing closed", file=sys.stderr)
         return PLANE_UNAVAILABLE
+    if accepted and body.get("verified") is not True:
+        # ADR-0013 third outcome: 200, stored and audited, but the plane refused
+        # a verified-done (enforcement was not provably live across the claimed
+        # work window). The local checks passing does not override the plane's
+        # verdict — printing SUCCEEDED here would assert exactly what the plane
+        # just denied. Loud, non-zero, with the plane's own reason.
+        print(f"zti receipt: NOT VERIFIED — receipt {body.get('receipt_id')} was "
+              f"stored and audited, but the plane refused a verified-done "
+              f"({body.get('reason', 'unspecified')}). The gate was not provably "
+              f"live across the work window; commits stay blocked. Restore the "
+              f"gate daemon, redo the work under it, then re-run `zti receipt`.",
+              file=sys.stderr)
+        return RECEIPT_NOT_PASSED
 
     # The human verdict word is the gate's (BLOCKED); the receipt's wire status
     # is the spec's ("failed") — same fact, two vocabularies (ADR-0010).
@@ -348,8 +409,10 @@ def main(argv: list[str] | None = None) -> int:
 
     p_receipt = sub.add_parser(
         "receipt", help="run required checks and mint a receipt for the staged content")
-    p_receipt.add_argument("--contract", help="path to a contract JSON (overrides "
-                           "plane policy and .zti/contract.json)")
+    p_receipt.add_argument("--contract", help="path to a contract JSON; when the "
+                           "plane publishes a policy for this repo it must match "
+                           "that policy exactly (the published policy is the "
+                           "authority), otherwise it overrides .zti/contract.json")
     p_receipt.set_defaults(func=cmd_receipt)
 
     p_verify = sub.add_parser(
