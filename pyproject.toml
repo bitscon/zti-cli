@@ -11,7 +11,7 @@ build-backend = "hatchling.build"
 # PyPI name (decided 2026-08-20; the `zti` name request, pypi/support#11900,
 # stays open — see docs/RELEASING.md). The installed command stays `zti`.
 name = "zti-cli"
-version = "0.1.0"
+version = "0.2.0"
 description = "ZTI client gate layer — receipt-gated commits and merges for AI coding agents (zti receipt / verify / install-hooks)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -41,3 +41,10 @@ zti = "zticli.main:main"
 # The CLI plus the gate library. The Claude Code hook pair ships in the repo
 # (hooks/claude-code/), installed by copying it, not via the wheel.
 packages = ["zticli", "ztipgate"]
+
+[tool.hatch.build.targets.sdist]
+# Only what a user needs: the two packages, the Claude Code hook pair the
+# README tells users to run from the source tree, the tests, and the README
+# and LICENSE (pyproject.toml is always included). Repository housekeeping
+# (agent and estate notes, CI workflows, change records) stays out.
+only-include = ["zticli", "ztipgate", "hooks", "tests", "README.md", "LICENSE"]

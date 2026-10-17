@@ -8,6 +8,8 @@ Pins the fail-closed contract:
         daemon boundary (rel() returns the absolute path → out of scope).
 """
 
+import hashlib
+import hmac
 import json
 import subprocess
 import sys
@@ -43,12 +45,18 @@ def _handler_for(body_bytes):
     return H
 
 
-def _run_hook(gate_url, tool_input=None):
-    """Run pretooluse.py as a subprocess; return (exit_code, stdout)."""
-    stdin = json.dumps({"tool_name": "Bash",
+def _run_hook(gate_url, tool_input=None, session_file=None, tool_name="Bash"):
+    """Run pretooluse.py as a subprocess; return (exit_code, stdout).
+
+    `session_file`, when given, is exported as ZTI_GATE_SESSION_FILE so the hook
+    reads this session's daemon secret from a known path (ADR-0015)."""
+    stdin = json.dumps({"tool_name": tool_name,
                         "tool_input": tool_input or {"command": "rm -rf /important"}})
+    env = {"ZTI_GATE_URL": gate_url, "PATH": "/usr/bin:/bin"}
+    if session_file is not None:
+        env["ZTI_GATE_SESSION_FILE"] = str(session_file)
     p = subprocess.run([sys.executable, HOOK], input=stdin, capture_output=True,
-                       text=True, env={"ZTI_GATE_URL": gate_url, "PATH": "/usr/bin:/bin"})
+                       text=True, env=env)
     return p.returncode, p.stdout
 
 
@@ -59,6 +67,33 @@ def _serve(body_bytes):
     return f"http://127.0.0.1:{port}/evaluate"
 
 
+def _auth_handler_for(decision, reason, secret):
+    """Stub daemon that authenticates its answer the way the real one does: mac
+    over the EXACT request bytes + decision + reason, keyed by the session
+    secret (gated._mac). Proves the real daemon still works end to end."""
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            mac = gated._mac(secret, raw, decision, reason)
+            body = json.dumps({"decision": decision, "reason": reason,
+                               "mac": mac}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    return H
+
+
+def _serve_authed(decision, reason, secret):
+    srv = HTTPServer(("127.0.0.1", 0), _auth_handler_for(decision, reason, secret))
+    threading.Thread(target=srv.handle_request, daemon=True).start()
+    return f"http://127.0.0.1:{srv.server_address[1]}/evaluate"
+
+
 # --- pretooluse.py fail-closed contract (F4) --------------------------------
 
 def test_hook_blocks_when_gate_unreachable():
@@ -67,9 +102,144 @@ def test_hook_blocks_when_gate_unreachable():
     assert code == 2
 
 
-def test_hook_allows_on_clean_allow():
-    code, out = _run_hook(_serve(b'{"decision":"allow"}'))
-    assert code == 0 and out.strip() == ""   # allow = exit 0, no deny payload
+def test_hook_allows_on_authenticated_allow(tmp_path):
+    # The real daemon signs its allow with this session's secret; the hook
+    # verifies it and passes the tool (exit 0, no deny payload).
+    secret = "s3cret-session-value"
+    sf = tmp_path / ".zti" / "gated.session"
+    sf.parent.mkdir(parents=True)
+    sf.write_text(secret)
+    code, out = _run_hook(_serve_authed("allow", "not gated", secret), session_file=sf)
+    assert code == 0 and out.strip() == ""
+
+
+def test_hook_blocks_unauthenticated_allow(tmp_path):
+    # THE REPRODUCTION (ADR-0013 Leg 2 / card zti:fix-hookimp): an impostor squats
+    # the port and answers a bare allow with NO mac. On the pre-ADR-0015 tree the
+    # hook accepted it (exit 0); it must now be REFUSED and fail closed (exit 2).
+    # The real daemon's session file is present (it wrote the real secret before
+    # being killed); the impostor does not know it, so no valid mac can be formed.
+    sf = tmp_path / ".zti" / "gated.session"
+    sf.parent.mkdir(parents=True)
+    sf.write_bytes(b"the-real-secret-the-impostor-never-read")
+    code, _ = _run_hook(_serve(b'{"decision":"allow"}'), session_file=sf)
+    assert code == 2
+
+
+def test_hook_blocks_allow_with_wrong_mac(tmp_path):
+    # An impostor that guesses the wire shape but signs with the wrong key is
+    # still refused: the mac is over the session secret it does not hold.
+    sf = tmp_path / ".zti" / "gated.session"
+    sf.parent.mkdir(parents=True)
+    sf.write_bytes(b"real-secret")
+    code, _ = _run_hook(_serve_authed("allow", "not gated", "WRONG-secret"),
+                        session_file=sf)
+    assert code == 2
+
+
+def test_hook_blocks_allow_with_non_ascii_mac(tmp_path):
+    # REGRESSION GUARD (ADR-0015 review, blocking finding): hmac.compare_digest
+    # RAISES TypeError on a non-ASCII str mac, and the impostor controls the mac.
+    # That raise must be caught by the fail-closed guard (exit 2), never escape as
+    # exit 1 (which Claude Code treats as non-blocking -> the tool PROCEEDS).
+    sf = tmp_path / ".zti" / "gated.session"
+    sf.parent.mkdir(parents=True)
+    sf.write_text("real-secret")
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = json.dumps({"decision": "allow", "reason": "not gated",
+                               "mac": "\u00e9" * 64}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.handle_request, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/evaluate"
+    code, _ = _run_hook(url, session_file=sf)
+    assert code == 2
+
+
+def test_hook_blocks_allow_when_secret_unreadable(tmp_path):
+    # An unreadable/missing session secret is a DENY, never a bypass: the hook
+    # cannot authenticate any allow, so it fails closed.
+    missing = tmp_path / "does" / "not" / "exist"
+    code, _ = _run_hook(_serve_authed("allow", "not gated", "whatever"),
+                        session_file=missing)
+    assert code == 2
+
+
+def test_hook_sends_a_fresh_nonce_each_call(tmp_path):
+    # The per-request nonce is the replay defence: it makes each request's bytes
+    # unique, so a captured (allow, mac) cannot be replayed for the SAME action on
+    # a later request. Pin that the nonce actually varies (a constant nonce would
+    # reopen same-action replay). Also proves a valid authenticated allow passes.
+    secret = "nonce-fresh-secret"
+    sf = tmp_path / ".zti" / "gated.session"
+    sf.parent.mkdir(parents=True)
+    sf.write_text(secret)
+    seen = tmp_path / "nonces.txt"
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            nonce = json.loads(raw)["nonce"]
+            with open(seen, "a") as fh:
+                fh.write(nonce + "\n")
+            mac = gated._mac(secret, raw, "allow", "not gated")
+            body = json.dumps({"decision": "allow", "reason": "not gated",
+                               "mac": mac}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=lambda: [srv.handle_request() for _ in range(2)],
+                     daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/evaluate"
+    c1, _ = _run_hook(url, session_file=sf)
+    c2, _ = _run_hook(url, session_file=sf)
+    assert c1 == 0 and c2 == 0
+    nonces = seen.read_text().split()
+    assert len(nonces) == 2 and nonces[0] != nonces[1], "the per-request nonce did not vary"
+
+
+def test_hook_authenticated_allow_not_replayable_across_requests(tmp_path):
+    # A captured (allow, mac) for one request must not authenticate a DIFFERENT
+    # one: the mac binds to the request bytes, which carry a fresh nonce, so a
+    # replay stub returning a fixed prior mac fails verification.
+    secret = "replay-secret"
+    sf = tmp_path / ".zti" / "gated.session"
+    sf.parent.mkdir(parents=True)
+    sf.write_text(secret)
+    # A stub that echoes a mac computed over a FIXED (different) request body.
+    stale = gated._mac(secret, b'{"stolen":"body"}', "allow", "not gated")
+
+    class H(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            body = json.dumps({"decision": "allow", "reason": "not gated",
+                               "mac": stale}).encode()
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+    srv = HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.handle_request, daemon=True).start()
+    url = f"http://127.0.0.1:{srv.server_address[1]}/evaluate"
+    code, _ = _run_hook(url, session_file=sf)
+    assert code == 2
 
 
 def test_hook_denies_on_clean_deny():
@@ -184,3 +354,102 @@ def test_daemon_blocks_irreversible_bash(daemon):
 def test_daemon_bash_passthrough_is_benign_only(daemon):
     _, d = daemon.evaluate("Bash", {"command": "echo hello"})
     assert d.decision == ALLOW and d.reason_code == "BASH_PASSTHROUGH"
+
+
+# --- end to end through the REAL daemon server (make_server) + pretooluse.py,
+#     proving the mac the daemon actually attaches is the one the hook accepts
+#     (ADR-0015). Guards against the daemon's _respond wiring regressing. -----
+
+def _real_daemon(tmp_path, secret):
+    d = gated.Daemon.__new__(gated.Daemon)
+    d.repo_root = tmp_path.resolve()
+    d.observe = False
+    d.contract = Contract(work_id="w", allowed_paths=["src/**"], forbidden_paths=["db/**"],
+                          required_checks=["true"])
+    d.gate = Gate(d.contract)
+    d.gate_id, d.key = "g1", "k"
+    d.hook_secret = secret
+    return d
+
+
+def _serve_daemon(daemon):
+    srv = gated.make_server(daemon, 0)
+    threading.Thread(target=srv.handle_request, daemon=True).start()
+    return f"http://127.0.0.1:{srv.server_address[1]}/evaluate"
+
+
+def test_real_daemon_authenticated_allow_end_to_end(tmp_path, monkeypatch):
+    secret = "real-daemon-secret"
+    d = _real_daemon(tmp_path, secret)
+    monkeypatch.setattr(d, "ship", lambda *a, **k: None)
+    sf = tmp_path / ".zti" / "gated.session"
+    sf.parent.mkdir(parents=True)
+    sf.write_text(secret)
+    url = _serve_daemon(d)
+    # An in-scope write the daemon ALLOWS, authenticated by the real _respond mac.
+    code, out = _run_hook(url, tool_name="Write",
+                          tool_input={"file_path": str(tmp_path / "src" / "app.py")},
+                          session_file=sf)
+    assert code == 0 and out.strip() == ""
+
+
+def test_daemon_requires_a_hook_secret_to_start(monkeypatch, tmp_path):
+    # An old plane that issues no session secret leaves the daemon unable to
+    # authenticate itself to the hook. That must be a fail-CLOSED start (PlaneError),
+    # never a silent downgrade to an unauthenticated daemon.
+    def _fake_api(path, body=None, key=None, enroll=False):
+        if path == "/v1/gates/register":
+            return {"gate_id": "g1", "api_key": "k"}      # NO hook_secret
+        return {"contract": {"work_id": "w", "allowed_paths": []}, "etag": "e"}
+    monkeypatch.setattr(gated, "api", _fake_api)
+    monkeypatch.setenv("ZTI_GATE_SESSION_FILE", str(tmp_path / "gated.session"))
+    with pytest.raises(gated.PlaneError):
+        gated.Daemon(tmp_path, "demo")
+
+
+def test_daemon_writes_session_secret_0600(monkeypatch, tmp_path):
+    # The daemon hands the hook this session's secret through a same-user 0600
+    # file, holding the plane-minted value verbatim.
+    def _fake_api(path, body=None, key=None, enroll=False):
+        if path == "/v1/gates/register":
+            return {"gate_id": "g1", "api_key": "k", "hook_secret": "sekret-value"}
+        return {"contract": {"work_id": "w", "allowed_paths": []}, "etag": "e"}
+    monkeypatch.setattr(gated, "api", _fake_api)
+    monkeypatch.delenv("ZTI_GATE_SESSION_FILE", raising=False)
+    d = gated.Daemon(tmp_path, "demo")
+    sf = tmp_path / ".zti" / "gated.session"
+    assert sf.read_text() == "sekret-value"
+    assert (sf.stat().st_mode & 0o777) == 0o600
+    assert d.session_file == sf
+
+
+def test_real_daemon_deny_end_to_end(tmp_path, monkeypatch):
+    secret = "real-daemon-secret"
+    d = _real_daemon(tmp_path, secret)
+    monkeypatch.setattr(d, "ship", lambda *a, **k: None)
+    sf = tmp_path / ".zti" / "gated.session"
+    sf.parent.mkdir(parents=True)
+    sf.write_text(secret)
+    url = _serve_daemon(d)
+    code, out = _run_hook(url, tool_name="Write",
+                          tool_input={"file_path": str(tmp_path / "db" / "x.sql")},
+                          session_file=sf)
+    assert code == 0
+    assert json.loads(out)["hookSpecificOutput"]["permissionDecision"] == "deny"
+
+
+def test_hook_blocks_allow_with_empty_secret(tmp_path):
+    # DEFENCE IN DEPTH (ADR-0015 mutation-gate survivor, zti:fix-hookimp round):
+    # the daemon never writes an empty secret (that mutant is killed), but if the
+    # session file existed yet were EMPTY the "secret" would be the PUBLIC empty
+    # key -- an impostor could sign a valid mac with hmac(b"", ...). The `if not
+    # secret` guard must treat an empty secret as unreadable and fail CLOSED,
+    # before computing a mac the impostor can also compute. Distinct from the
+    # missing-file case (secret is None), which blocks via the hmac.new(None)
+    # TypeError regardless of the guard -- so only THIS case pins the guard.
+    sf = tmp_path / ".zti" / "gated.session"
+    sf.parent.mkdir(parents=True)
+    sf.write_bytes(b"")   # exists, but empty
+    # The impostor's best move: sign with the empty key it can guess is empty.
+    code, _ = _run_hook(_serve_authed("allow", "not gated", ""), session_file=sf)
+    assert code == 2

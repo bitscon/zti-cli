@@ -29,7 +29,7 @@ cd zti-cli
 rm -rf dist/
 python3 -m build
 python3 -m twine check dist/*
-python3 -m twine upload dist/zti_cli-0.1.0-py3-none-any.whl dist/zti_cli-0.1.0.tar.gz
+python3 -m twine upload dist/zti_cli-0.2.0-py3-none-any.whl dist/zti_cli-0.2.0.tar.gz
 ```
 
 If `build` or `twine` is missing:
