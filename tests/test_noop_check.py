@@ -1,4 +1,4 @@
-"""zti:vac-gate — the constant-true no-op check classifier (`is_noop_check`).
+"""The constant-true no-op check classifier (`is_noop_check`).
 
 The classifier half of the upstream suite. The contract generator that also
 uses it ships with the ZTI Core plane, so its half stays in the product tree.

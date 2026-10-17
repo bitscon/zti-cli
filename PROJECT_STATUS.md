@@ -10,7 +10,8 @@
   to the ZTI Core product tree: plane transport policy (plaintext only to
   loopback, `ZTI_ALLOW_INSECURE_HTTP` override), published-policy supremacy
   over `--contract`, no-op check warning, enforcement-liveness heartbeat and
-  the "stored but not verified" outcome, signed daemon-to-hook allows. Suites
+  the "stored but not verified" outcome, daemon answers to the hook
+  authenticated with an HMAC under a per-session secret. Suites
   now also cover the CLI, the daemon client and the transport policy. Open:
   publish 0.2.0, then regenerate the Tier-3 template's verifier pin.
   See `docs/changes/CHANGE-2026-10-16-001-upstream-sync-0.2.0.md`.

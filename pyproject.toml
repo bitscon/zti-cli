@@ -41,3 +41,10 @@ zti = "zticli.main:main"
 # The CLI plus the gate library. The Claude Code hook pair ships in the repo
 # (hooks/claude-code/), installed by copying it, not via the wheel.
 packages = ["zticli", "ztipgate"]
+
+[tool.hatch.build.targets.sdist]
+# Only what a user needs: the two packages, the Claude Code hook pair the
+# README tells users to run from the source tree, the tests, and the README
+# and LICENSE (pyproject.toml is always included). Repository housekeeping
+# (agent and estate notes, CI workflows, change records) stays out.
+only-include = ["zticli", "ztipgate", "hooks", "tests", "README.md", "LICENSE"]

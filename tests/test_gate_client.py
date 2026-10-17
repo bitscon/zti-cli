@@ -1,13 +1,14 @@
 """The gate daemon's plane client (hooks/claude-code/gated.py), driven without
 a plane.
 
-The client halves of the upstream enrollment fail-closed suite (zti:vac-config)
-and the approval-release suite's terminal guard (zti:fix-approvals): every
-refusal, outage and hostile reply from the plane becomes one sanitised
-operator line, never a traceback or a forged "enforcing" line, and the
-enrollment token is never sent malformed or echoed. The plane halves of those
-suites stay in the ZTI Core product tree. Plus the daemon's liveness heartbeat
-(ADR-0013 Tier 1), pinned here because its plane half lives upstream.
+The client halves of the upstream enrollment fail-closed suite and the
+approval suite's terminal guard: every refusal, outage and hostile reply from
+the plane becomes one sanitised operator line, never a traceback or a forged
+"enforcing" line, and the enrollment token is never sent malformed or echoed.
+The plane halves of those suites stay in the ZTI Core product tree. Plus the
+daemon's liveness heartbeat and the session file's symlink refusal, pinned
+here because their plane halves live upstream. (The test bodies below are
+carried from the product tree and keep its internal references.)
 """
 
 import sys
@@ -413,7 +414,7 @@ def test_the_last_resort_swallow_is_on_the_failure_path():
     assert stream.calls == 2                          # it really did try twice
 
 
-# --- liveness heartbeat (ADR-0013 Tier 1), client half -----------------------
+# --- liveness heartbeat, client half -----------------------------------------
 
 def _heartbeat_daemon(monkeypatch, tmp_path, fail_first=0):
     """A real Daemon against a stand-in plane, with the beat interval shrunk.
@@ -463,3 +464,26 @@ def test_a_failed_heartbeat_never_stops_the_beat(monkeypatch, tmp_path):
     daemon, calls = _heartbeat_daemon(monkeypatch, tmp_path, fail_first=2)
     daemon.start_heartbeat()
     _wait_for_beats(calls, 4)
+
+
+# --- the session file is never written through a planted symlink ------------
+
+def test_the_session_secret_is_not_written_through_a_symlink(monkeypatch, tmp_path):
+    """An agent that plants a symlink at the session-file path must not get the
+    daemon to write this session's secret somewhere it chose. The daemon
+    refuses to start instead."""
+    target = tmp_path / "elsewhere"
+    target.write_text("untouched")
+    link = tmp_path / "gated.session"
+    link.symlink_to(target)
+
+    def fake_api(path, body=None, key=None, enroll=False):
+        return {"gate_id": "g1", "api_key": "k", "hook_secret": "the-secret"}
+
+    monkeypatch.setattr(gated, "api", fake_api)
+    monkeypatch.setenv("ZTI_GATE_SESSION_FILE", str(link))
+    with pytest.raises(gated.PlaneError) as ei:
+        gated.Daemon(tmp_path, "demo")
+    assert "cannot write the hook session file" in str(ei.value)
+    assert target.read_text() == "untouched"
+    assert "the-secret" not in str(ei.value)

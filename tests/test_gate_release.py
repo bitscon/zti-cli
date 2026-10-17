@@ -1,4 +1,4 @@
-"""Gate.record_release (zti:fix-approvals, ADR-0014), library half.
+"""Gate.record_release: an operator-approved action, library half.
 
 When an operator approves a blocked action and the agent then performs it,
 the gate records it as performed, not blocked, so the receipt never asserts a

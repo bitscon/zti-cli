@@ -6,13 +6,14 @@ plane, which does not ship here. This suite swaps the CLI's HTTP layer
 the CLI makes; git, the gate library, hashing and the checks are real.
 
 Pins the client-side halves of:
-  - zti:vac-gate (policy supremacy): when the plane publishes a policy for the
-    repo, a DIVERGENT --contract is refused before anything runs or ships; a
-    byte-for-byte restatement mints under the plane policy's etag.
-  - zti:vac-gate (no-op lint): a constant-true required check mints, but the
-    mint says out loud that it verifies nothing.
-  - ADR-0013 (enforcement liveness): the plane's "stored but not verified"
-    answer never prints SUCCEEDED, and a blocked verify names the plane's reason.
+  - Policy supremacy: when the plane publishes a policy for the repo, a
+    DIVERGENT --contract is refused before anything runs or ships; a
+    restatement of the same policy mints under the plane policy's etag.
+  - The no-op lint: a constant-true required check mints, but the mint says
+    out loud that it verifies nothing.
+  - Enforcement liveness: the plane's "stored but not verified" answer never
+    prints SUCCEEDED, and a blocked verify names the plane's reason.
+  - The transport policy, reached through the CLI entry point.
 """
 
 import json
@@ -147,7 +148,7 @@ def test_mint_does_not_warn_on_a_real_check(repo, monkeypatch, capsys):
     assert "no-op" not in capsys.readouterr().err
 
 
-# ── ADR-0013: stored but not enforcement-verified ────────────────────────────
+# ── stored by the plane but not verified (enforcement was not live) ─────────
 
 def test_receipt_unverified_third_outcome_fails_loud(repo, monkeypatch, capsys):
     """The plane's 200 {accepted, verified: false} must never print SUCCEEDED:
@@ -183,7 +184,7 @@ def test_verify_blocked_line_without_a_reason_keeps_the_old_advice(repo, monkeyp
     assert "Fix the work" in capsys.readouterr().err
 
 
-# ── ADR-0016 through the CLI entry point ─────────────────────────────────────
+# ── plaintext http to a non-loopback plane, through the CLI entry point ─────
 
 def test_receipt_refuses_a_plaintext_off_box_plane_before_any_request(repo, monkeypatch, capsys):
     shipped = _plane(monkeypatch)

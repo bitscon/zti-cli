@@ -55,6 +55,11 @@ secret. If you must run a plaintext plane on a LAN, set
 proceeds with a warning on every start. Plaintext plane traffic never goes
 through an environment proxy.
 
+This check runs on every command that talks to the plane, including
+`zti verify` and therefore the pre-commit gate: with a plaintext LAN plane,
+every commit is blocked until `ZTI_ALLOW_INSECURE_HTTP=1` is set in the
+environment git runs under, or the plane moves to https.
+
 ## Use
 
 ```bash
@@ -81,7 +86,10 @@ the repo, then `--contract <file>`, then `.zti/contract.json`. The published
 policy is the authority. A `--contract` file that differs from it is refused
 and nothing mints, so the governed party cannot swap the operator's checks
 for weaker ones; a file that restates the policy exactly is accepted. With no
-published policy, the local contract is used. `zti receipt` also warns when a
+published policy, the local contract is used. This client-side refusal needs
+the plane to be reachable and serving the policy at mint time; when it is not,
+the local contract mints offline, and it is the plane's own check at ingest
+that refuses a receipt minted under anything but its published policy. `zti receipt` also warns when a
 required check is a constant-true no-op (`true`, `echo ok`, `pytest || true`):
 it still mints, but says the check verifies nothing.
 
@@ -101,10 +109,11 @@ branch protection.
   off reads as dark on the plane instead of silently looking healthy.
 - `pretooluse.py` is the Claude Code `PreToolUse` hook. It asks the local
   daemon and blocks on anything but an explicit allow. A dead gate can never
-  silently allow. An allow counts only when the daemon signs it with this
-  session's secret, so a process squatting the daemon's port cannot answer
-  "allow"; an unsigned or wrongly signed allow, or a secret the hook cannot
-  read, blocks.
+  silently allow. An allow counts only when it is authenticated with an HMAC
+  under a per-session secret, computed over this exact request and its fresh
+  nonce, so a process squatting the daemon's port cannot answer "allow". An
+  allow with a missing or wrong HMAC, or a secret the hook cannot read,
+  blocks.
 
 Start the daemon beside the repo first, with the Python that has `zti-cli`
 installed (the daemon imports its gate library). At startup it registers with
@@ -117,21 +126,39 @@ control), and loads the contract it will enforce:
 python3 hooks/claude-code/gated.py --repo-root . --repo-name myrepo
 ```
 
-Run the hook from the governed repo's root so it finds the session file, or
-export the same `ZTI_GATE_SESSION_FILE` to both.
-
 The honest limit: the hook runs as the agent's own user, so an agent that
-reads its own session file can still forge a signed allow. Daemon signing
-raises the bar against an impostor that has not read it; it does not stop one
-that has. Only signing off the machine closes that, and the plane's liveness
-record is what makes a disarm visible.
+reads its own session file can still compute a valid HMAC for a forged allow.
+The per-session secret raises the bar against an impostor that has not read
+it; it does not stop one that has. Only authenticating off the machine closes
+that, and the plane's liveness record is what makes a disarm visible.
 
 Then wire the hook in the governed repo's `.claude/settings.json`:
 
 ```json
 {"hooks": {"PreToolUse": [{"matcher": "Write|Edit|NotebookEdit|Bash",
-  "hooks": [{"type": "command", "command": "python3 /path/to/pretooluse.py"}]}]}}
+  "hooks": [{"type": "command",
+             "command": "ZTI_GATE_SESSION_FILE=/abs/path/to/repo/.zti/gated.session python3 /path/to/pretooluse.py"}]}]}}
 ```
+
+Give the hook the session file as an absolute path, as above, so it does not
+depend on the directory the hook happens to run in. If the daemon was started
+with its own `ZTI_GATE_SESSION_FILE`, use that same path here.
+
+## Upgrading from 0.1.0
+
+0.2.0 is stricter in four ways an existing setup can hit:
+
+- **A `--contract` that differs from the plane's published policy is refused**
+  and nothing mints. Drop `--contract`, or have the operator publish the change.
+- **Plain `http://` to a non-loopback plane is refused**, by `zti receipt`, by
+  `zti verify` and so by the pre-commit gate, and by the hook daemon. On a
+  plaintext LAN plane every commit is blocked until `ZTI_ALLOW_INSECURE_HTTP=1`
+  is set in the environment git runs under, or the plane moves to https.
+- **The hook pair must be upgraded together**, against a plane that issues the
+  per-session secret; an older plane makes the daemon refuse to start. Add
+  `ZTI_GATE_SESSION_FILE` to the hook command as shown above.
+- **The daemon needs `zti-cli` installed** in the Python that runs it; running
+  `gated.py` from a bare checkout with nothing installed no longer works.
 
 ## What you need to run it
 
