@@ -89,8 +89,9 @@ for weaker ones; a file that restates the policy exactly is accepted. With no
 published policy, the local contract is used. This client-side refusal needs
 the plane to be reachable and serving the policy at mint time; when it is not,
 the local contract mints offline, and it is the plane's own check at ingest
-that refuses a receipt minted under anything but its published policy. `zti receipt` also warns when a
-required check is a constant-true no-op (`true`, `echo ok`, `pytest || true`):
+that refuses a receipt minted under anything but its published policy.
+
+`zti receipt` also warns when a required check is a constant-true no-op (`true`, `echo ok`, `pytest || true`):
 it still mints, but says the check verifies nothing.
 
 For Tier 3, copy `zticli/templates/zti-verify.yml` into the governed repo's
