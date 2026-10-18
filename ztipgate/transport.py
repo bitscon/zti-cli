@@ -1,8 +1,8 @@
-"""Plane transport policy (ADR-0016, card zti:fix-planeapi).
+"""Plane transport policy.
 
 The channel between a client (the gate daemon, the `zti` CLI) and the plane
-carries contracts, decisions, escalation releases and — since ADR-0015 — the
-per-session hook secret. `ZTI_PLANE_URL` defaulted to plaintext http and nothing
+carries contracts, decisions, escalation releases and the per-session hook
+secret. `ZTI_PLANE_URL` defaulted to plaintext http and nothing
 anywhere refused it, so a LAN plane was one ARP spoof away from an attacker
 holding every gate key minted since.
 
@@ -83,8 +83,8 @@ def opener_for(url: str) -> urllib.request.OpenerDirector:
     urllib's default opener honours `http_proxy` / `HTTP_PROXY` from the
     environment, and its bypass list is only `no_proxy` — so on a box with a
     corporate or CI proxy a request the policy judged LOOPBACK went, in
-    plaintext, to the proxy address instead (found by the fix-planeapi
-    round). Plaintext plane traffic therefore NEVER uses a proxy: the policy
+    plaintext, to the proxy address instead (found in review). Plaintext
+    plane traffic therefore NEVER uses a proxy: the policy
     admitted it on the strength of where it goes. https keeps the default
     opener — through a proxy it is a CONNECT tunnel and stays end-to-end TLS.
     """

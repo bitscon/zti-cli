@@ -9,9 +9,9 @@ Reads the PreToolUse JSON on stdin, asks the local daemon, denies on "deny".
 Daemon unreachable = exit 2 = tool call blocked with the reason fed back to
 the agent. A dead gate can never silently allow.
 
-Daemon authentication (ADR-0015, card zti:fix-hookimp). The port is local and
-predictable, so any local process can squat it and answer "allow" -- ADR-0013's
-reproduction proved the whole kill surface is open to a governed agent. So an
+Daemon authentication. The port is local and predictable, so any local process
+can squat it and answer "allow" -- a reproduction showed a governed agent can do
+exactly that and switch enforcement off. So an
 "allow" is trusted ONLY when it carries a valid message authentication code the
 real daemon computed with this session's secret (written by the daemon to the
 session file below). An allow with a missing or wrong mac, or a session secret
@@ -20,7 +20,8 @@ we cannot read, fails CLOSED -- an unreadable secret is a DENY, never a bypass.
 This raises the local bar against an impostor that has not read the session
 secret; it does NOT stop an agent that reads its own same-user session file and
 feeds the secret to its impostor. That residual is the gate-key custody limit
-ADR-0013 Decision 3 records, and only off-machine signing (Tier 4) closes it.
+of anything that runs as the agent's own user, and only signing off the machine
+closes it.
 A deny/escalate/unknown answer blocks regardless of the mac -- only a forged
 allow is dangerous, and only an allow is authenticated.
 """

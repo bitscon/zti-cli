@@ -29,20 +29,24 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from ztipgate.transport import PlaneURLRefused, apply_transport
-
+# Every ztipgate import sits under the fallback: run as a bare script beside a
+# checkout with nothing installed, the FIRST ztipgate import is the one that
+# fails, and an import above this block used to kill the daemon with
+# ModuleNotFoundError before the fallback could run.
 try:
     from ztipgate.gate import (DENY, Contract, Decision, Gate, _match,
                                is_irreversible)
+    from ztipgate.transport import PlaneURLRefused, apply_transport
 except ImportError:  # bare script beside a checkout, nothing installed
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from ztipgate.gate import (DENY, Contract, Decision, Gate, _match,
                                is_irreversible)
+    from ztipgate.transport import PlaneURLRefused, apply_transport
 
 PLANE = os.environ.get("ZTI_PLANE_URL", "http://127.0.0.1:8100")
 PORT = 18790
 
-# Which refusals are worth asking a human about (ADR-0014 Decision 9). An
+# Which refusals are worth asking a human about. An
 # ALLOWLIST, not "everything that is not a hard deny", so a future reason code
 # never becomes approvable by accident.
 #
@@ -59,12 +63,11 @@ PORT = 18790
 _ESCALATABLE_REASON_CODES = frozenset({"UNSCOPED_ACTION", "OUT_OF_SCOPE"})
 
 
-# Where the daemon drops the per-session secret for the hook to read (ADR-0015,
-# card zti:fix-hookimp). Same-user file, 0600: it raises the local bar against a
-# port-squatting impostor that has NOT read this file, and does NOT pretend to
-# stop an agent that reads its own session state -- that residual is the
-# gate-key custody limit ADR-0013 Decision 3 records, closable only off the
-# machine.
+# Where the daemon drops the per-session secret for the hook to read. Same-user
+# file, 0600: it raises the local bar against a port-squatting impostor that has
+# NOT read this file, and does NOT pretend to stop an agent that reads its own
+# session state -- that residual is the gate-key custody limit of anything that
+# runs as the agent's own user, closable only by signing off the machine.
 SESSION_FILE_ENV = "ZTI_GATE_SESSION_FILE"
 _SESSION_FILE_DEFAULT = ".zti/gated.session"
 
@@ -83,13 +86,13 @@ def _mac(secret: str, raw: bytes, decision: str, reason: str) -> str:
 
 def _escalation_action(action: dict) -> dict:
     """The action as the OPERATOR will judge it, which is what the plane
-    fingerprints (ADR-0014 D3).
+    fingerprints.
 
     `evaluate` labels a file write with a synthetic command, `f"{tool} {path}"`
     — Write, Edit and NotebookEdit on ONE file therefore produce three
     different strings. Fingerprinting those verbatim made the operator's
-    decision protect a TOOL rather than a FILE: both review lenses reproduced
-    an agent taking a denial on `Write build/x` and getting the same bytes
+    decision protect a TOOL rather than a FILE: review reproduced an agent
+    taking a denial on `Write build/x` and getting the same bytes
     written by re-asking as `Edit build/x`. The operator read "deny this write"
     and the plane stored "deny this spelling of this write".
 
@@ -102,16 +105,18 @@ def _escalation_action(action: dict) -> dict:
         return action
     return {**action, "command": f"write {action.get('path', '')}"}
 
-# Proof-of-life cadence (ADR-0013 Tier 1). Mirrors core/liveness.py's
-# HEARTBEAT_INTERVAL_SECONDS. Deliberately duplicated rather than imported —
-# this daemon must run as a bare script beside a checkout (same rationale as
-# _HEADER_SAFE below); tests/test_enforcement_liveness.py pins the two equal.
+# Proof-of-life cadence: how often the daemon tells the plane it is still
+# enforcing. Must equal the plane's own heartbeat interval. Duplicated rather
+# than imported because this daemon must run as a bare script beside a checkout
+# (same rationale as _HEADER_SAFE below); the plane's own tests pin the two
+# equal.
 HEARTBEAT_INTERVAL_SECONDS = 30
 
 
-# Mirrors core/auth.py's _HEADER_SAFE. Deliberately duplicated rather than imported:
-# this daemon must run as a bare script beside a checkout, and core.auth pulls in
-# FastAPI. tests/test_enroll_fail_closed.py pins the two sets equal.
+# The characters the plane accepts in an HTTP header value; must equal the
+# plane's own set. Duplicated rather than imported: this daemon must run as a
+# bare script beside a checkout, and the plane's auth module pulls in FastAPI.
+# The plane's own tests pin the two sets equal.
 _HEADER_SAFE = frozenset(chr(c) for c in range(0x21, 0x7F)) | {" ", "\t"}
 
 
@@ -221,17 +226,16 @@ def _announce(msg, stream=None):
     one used to escape `_refresh_contract`, and from there `_consult_release`
     and `evaluate()` — so the action was correctly blocked but the daemon
     shipped NO decision event and the plane never heard about the denial
-    (round wave 8, reproduced both ways).
+    (found in review, reproduced both ways).
 
     An announcement is not enforcement. It is never raised — but it is not
     silently thrown away either. Swallowing an unencodable line made ENFORCING
     mode look exactly like OBSERVE mode on a non-UTF-8 terminal (both banners
     carry an em dash), and let a governed agent suppress its own DENY line just
-    by putting a non-ASCII character in a path. Losing the message is the same
-    defect class as the one this whole card is about: a surface that quietly
-    stops saying what it knows. So an unencodable line is re-encoded lossily and
-    printed anyway; only a stream that cannot be written to at all is given up
-    on (round wave 9).
+    by putting a non-ASCII character in a path. Losing the message is a defect
+    in its own right: a surface that quietly stops saying what it knows. So an
+    unencodable line is re-encoded lossily and printed anyway; only a stream
+    that cannot be written to at all is given up on.
     """
     out = stream if stream is not None else sys.stdout
     try:
@@ -259,14 +263,14 @@ class Daemon:
         # path and into operator-facing messages. Sanitised at the boundary.
         self.gate_id, self.key = _safe(reg["gate_id"], 128), reg["api_key"]
         # The plane-minted per-session secret the daemon proves to the hook on
-        # every answer (ADR-0015). An old plane that does not issue one leaves the
+        # every answer. An old plane that does not issue one leaves the
         # daemon unable to authenticate itself; that is a fail-CLOSED start, not a
         # silent downgrade -- the hook then refuses every allow it cannot verify.
         self.hook_secret = reg.get("hook_secret")
         if not self.hook_secret:
             raise PlaneError("plane did not issue a hook session secret -- refusing "
                              "to start a daemon the hook cannot authenticate "
-                             "(upgrade the plane past ADR-0015)")
+                             "(upgrade the plane to a release that issues one)")
         self._write_session_file()
         if observe:
             # No contract needed — we're here to learn what the agent does so a
@@ -282,7 +286,7 @@ class Daemon:
         pol = api(f"/v1/gates/{self.gate_id}/policy", key=self.key)
         self.contract = Contract(**pol["contract"])
         # The basis this gate is judging on. Declared to the plane on every
-        # escalation (ADR-0014 D11) so a gate still holding a superseded
+        # escalation so a gate still holding a superseded
         # contract cannot have an action the CURRENT one forbids released: it
         # would report that path as OUT_OF_SCOPE, which is escalatable, where a
         # gate holding the live contract reports FORBIDDEN_PATH_WRITE, which is
@@ -307,7 +311,7 @@ class Daemon:
             path.parent.mkdir(parents=True, exist_ok=True)
             # Create 0600 from the start; do not widen an existing file's mode.
             # O_NOFOLLOW: never write the secret through a symlink planted at
-            # the path (ADR-0015 review, low finding). O_EXCL is deliberately
+            # the path (found in review). O_EXCL is deliberately
             # NOT used -- the daemon rewrites its own file on every restart, so
             # requiring create-exclusive would refuse a legitimate restart.
             fd = os.open(str(path),
@@ -322,10 +326,10 @@ class Daemon:
         self.session_file = path
 
     def start_heartbeat(self):
-        """Beat to the plane on a timer (ADR-0013 Tier 1) so a quiet session —
+        """Beat to the plane on a timer so a quiet session —
         the agent thinking, not calling tools — never reads as a disarm. A
         failed beat is swallowed on purpose: the plane is never in the
-        evaluation path (ADR-0001), enforcement continues on the cached
+        evaluation path, enforcement continues on the cached
         contract, and the plane honestly records the silence as darkness —
         from its side an unreachable gate IS unobservable."""
         def loop():
@@ -402,14 +406,14 @@ class Daemon:
 
     def _consult_release(self, action, denial):
         """Present the action to the plane and take back the operator's
-        standing authority for it, if there is one (ADR-0014).
+        standing authority for it, if there is one.
 
         This is the ONLY thing that can turn this gate's own refusal into an
         allow, and it can only ever move in that direction. The evaluation
         above already happened, locally, against the cached contract — a plane
         that is down, slow, refusing, or answering nonsense leaves `denial`
         exactly as it was. That is why consulting the plane here does not put
-        it in the evaluation path (ADR-0001/0002): it can release, never
+        it in the evaluation path: it can release, never
         permit, and enforcement never weakens when the plane is unreachable.
 
         The gate does not name an escalation id — it re-presents the action,
@@ -425,9 +429,9 @@ class Daemon:
             # is used below as a dict key: an unhashable value ({} or []) from
             # a hostile or newer plane raised TypeError straight out of
             # evaluate(), which falsified this function's own claim that every
-            # failure of the consult is a deny (round finding, correctness
-            # lens — the hook still failed closed, but by accident, on a
-            # dropped HTTP response rather than by this code's decision).
+            # failure of the consult is a deny (found in review — the hook
+            # still failed closed, but by accident, on a dropped HTTP response
+            # rather than by this code's decision).
             state = answer.get("state")
             state = state if isinstance(state, str) else repr(state)
             esc_id = answer.get("escalation_id")
@@ -436,7 +440,7 @@ class Daemon:
             # refusal lands here too, as a 409. Either way the answer is the
             # denial we already reached locally. Re-pulling the contract is
             # attempted NEXT, not here, and its failure changes nothing: the
-            # gate keeps enforcing the contract it holds (ADR-0001).
+            # gate keeps enforcing the contract it holds.
             self._refresh_contract()
             return Decision(denial.decision, denial.reason_code,
                             f"{denial.detail} (approval unavailable: plane did not answer)")
@@ -457,8 +461,8 @@ class Daemon:
         The daemon otherwise pulls once at startup and never again, which is
         exactly what let a stale gate keep classifying a now-forbidden path as
         merely unscoped. A failure here is swallowed: the gate goes on enforcing
-        the contract it already holds, which is the ADR-0001 invariant — the
-        plane is never required for enforcement, only for release.
+        the contract it already holds — the plane is never required for
+        enforcement, only for release.
         """
         try:
             pol = api(f"/v1/gates/{self.gate_id}/policy", key=self.key)
@@ -473,7 +477,7 @@ class Daemon:
             # should be. Reachable from a version-skewed plane or a MITM on the
             # default plain-http transport. Same rule as the consult above:
             # every failure here is a swallowed refusal to refresh, never a
-            # raised one (round wave 7).
+            # raised one.
             return
         if etag == self.policy_etag:
             return
@@ -526,7 +530,7 @@ def make_server(daemon, port):
         # held the daemon long enough that every real hook call landing in the
         # window blew its own timeout and failed closed. A stall the daemon
         # tolerates for longer than its caller does is not bounded, it is
-        # deferred (round wave 12, measured).
+        # deferred (measured in review).
         timeout = 2
 
         def do_POST(self):
@@ -559,7 +563,7 @@ def make_server(daemon, port):
                 # 0.08s, and with a dead stderr the FIRST one killed the daemon
                 # after it had already registered — so the plane went on
                 # reporting the gate online with nothing listening on its port
-                # (round wave 10, reproduced both ways).
+                # (found in review, reproduced both ways).
                 _announce(f"gated: DENY   [MALFORMED_REQUEST] {_safe(exc, 200)}")
                 # "A denial the plane never hears about is a defect even though
                 # the action was blocked." Before this the request died before
@@ -583,7 +587,7 @@ def make_server(daemon, port):
 
         def _respond(self, payload, raw=b""):
             # Authenticate the answer so the hook can tell this daemon from an
-            # impostor squatting the port (ADR-0015). The mac binds to the exact
+            # impostor squatting the port. The mac binds to the exact
             # request bytes + the decision + its reason; the hook recomputes it and
             # refuses an allow that does not carry a valid one.
             payload["mac"] = _mac(daemon.hook_secret, raw,
@@ -603,7 +607,7 @@ def make_server(daemon, port):
             # The stdlib prints a full traceback to stderr here. That is an
             # unguarded operator-facing write on the one path that is reached
             # precisely when something has already gone wrong — the same
-            # dead-stream premise that killed the daemon twice in this round.
+            # dead-stream premise that killed the daemon twice in review.
             _announce("gated: dropped a local request it could not serve",
                       stream=sys.stderr)
 
@@ -618,7 +622,7 @@ def main():
     ap.add_argument("--observe", action="store_true",
                     help="learn mode: allow everything, record every action for contractgen")
     args = ap.parse_args()
-    # Transport policy FIRST (ADR-0016): a plaintext plane off this box is
+    # Transport policy FIRST: a plaintext plane off this box is
     # refused before the daemon registers — registering would already have put
     # the api key and the hook session secret on the wire. A loopback plane or
     # https passes silently; the explicit override passes with a warning. This
