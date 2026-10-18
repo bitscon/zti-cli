@@ -17,7 +17,7 @@
 # never from an unpinned git ref. That is deliberate: a governed PR must not be
 # able to vendor a stub "zti" wheel that passes its own gate, and an unpinned
 # ref would let the verifier change under you. Pins below are the published
-# 0.2.0 release; regenerate on a version bump:
+# 0.2.1 release; regenerate on a version bump:
 #   pip download --no-deps zti-cli==<v> ztip==<v> && sha256sum *.whl
 #
 #   Residual: a PR that also edits THIS workflow file could repoint the
@@ -49,7 +49,7 @@ jobs:
       - name: Install the zti verifier — pinned, from PyPI, OUTSIDE the tree under test
         run: |
           printf '%s\n' \
-            'zti-cli==0.2.0 --hash=sha256:3ea9c2b606e67f24218047930d757f69c04b5d6854a6fe2523867c3f5f4e0ac3' \
+            'zti-cli==0.2.1 --hash=sha256:a070bac3c3b3dbbeed44edd531e92d94bea6fd441697af1e1b6a794419679588' \
             'ztip==1.0.0.dev2 --hash=sha256:4767a57369ff66289056336f51959a9e9997d0db3b646326d3491bcf8ecb1ac9' \
             > "$RUNNER_TEMP/zti-verifier.lock"
           pip install --require-hashes --no-deps -r "$RUNNER_TEMP/zti-verifier.lock"
