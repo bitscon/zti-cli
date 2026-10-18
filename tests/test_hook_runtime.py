@@ -2,10 +2,12 @@
 the gate daemon's decision mapping (hooks/claude-code/gated.py).
 
 Pins the fail-closed contract:
-  - F4: an unreachable gate OR any alive-but-malformed response BLOCKS (exit 2).
-        Before the fix a 200 with a bad shape raised → exit 1 → tool proceeded.
-  - F1(enf) defense-in-depth: a path that escapes the repo root is denied at the
-        daemon boundary (rel() returns the absolute path → out of scope).
+  - an unreachable gate OR any alive-but-malformed response BLOCKS (exit 2).
+    Before the fix a 200 with a bad shape raised → exit 1 → tool proceeded.
+  - defense-in-depth: a path that escapes the repo root is denied at the
+    daemon boundary (rel() returns the absolute path → out of scope).
+  - an allow counts only when it is authenticated with an HMAC under the
+    per-session secret the daemon shares with the hook.
 """
 
 import hashlib
@@ -49,7 +51,7 @@ def _run_hook(gate_url, tool_input=None, session_file=None, tool_name="Bash"):
     """Run pretooluse.py as a subprocess; return (exit_code, stdout).
 
     `session_file`, when given, is exported as ZTI_GATE_SESSION_FILE so the hook
-    reads this session's daemon secret from a known path (ADR-0015)."""
+    reads this session's daemon secret from a known path."""
     stdin = json.dumps({"tool_name": tool_name,
                         "tool_input": tool_input or {"command": "rm -rf /important"}})
     env = {"ZTI_GATE_URL": gate_url, "PATH": "/usr/bin:/bin"}
@@ -94,7 +96,7 @@ def _serve_authed(decision, reason, secret):
     return f"http://127.0.0.1:{srv.server_address[1]}/evaluate"
 
 
-# --- pretooluse.py fail-closed contract (F4) --------------------------------
+# --- pretooluse.py fail-closed contract -------------------------------------
 
 def test_hook_blocks_when_gate_unreachable():
     # Nothing listening on this port → connection refused → BLOCK (exit 2).
@@ -114,9 +116,9 @@ def test_hook_allows_on_authenticated_allow(tmp_path):
 
 
 def test_hook_blocks_unauthenticated_allow(tmp_path):
-    # THE REPRODUCTION (ADR-0013 Leg 2 / card zti:fix-hookimp): an impostor squats
-    # the port and answers a bare allow with NO mac. On the pre-ADR-0015 tree the
-    # hook accepted it (exit 0); it must now be REFUSED and fail closed (exit 2).
+    # THE REPRODUCTION: an impostor kills the daemon, squats its port and
+    # answers a bare allow with NO mac. Before daemon answers were authenticated
+    # the hook accepted it (exit 0); it must now be REFUSED and fail closed (exit 2).
     # The real daemon's session file is present (it wrote the real secret before
     # being killed); the impostor does not know it, so no valid mac can be formed.
     sf = tmp_path / ".zti" / "gated.session"
@@ -138,7 +140,7 @@ def test_hook_blocks_allow_with_wrong_mac(tmp_path):
 
 
 def test_hook_blocks_allow_with_non_ascii_mac(tmp_path):
-    # REGRESSION GUARD (ADR-0015 review, blocking finding): hmac.compare_digest
+    # REGRESSION GUARD (found in review): hmac.compare_digest
     # RAISES TypeError on a non-ASCII str mac, and the impostor controls the mac.
     # That raise must be caught by the fail-closed guard (exit 2), never escape as
     # exit 1 (which Claude Code treats as non-blocking -> the tool PROCEEDS).
@@ -256,7 +258,7 @@ def test_hook_denies_on_clean_deny():
     b'[]',                    # wrong type
 ])
 def test_hook_fails_closed_on_malformed_200(body):
-    # F4 regression: an alive gate returning garbage must BLOCK, not pass through.
+    # Regression: an alive gate returning garbage must BLOCK, not pass through.
     code, _ = _run_hook(_serve(body))
     assert code == 2, f"malformed body {body!r} did not fail closed"
 
@@ -312,7 +314,7 @@ def test_daemon_forbidden_symlink_by_name_is_denied(tmp_path, monkeypatch):
     assert dec.decision == DENY and dec.reason_code == "FORBIDDEN_PATH_WRITE"
 
 
-# --- daemon evaluate(): scope enforcement + repo escape (F1) ----------------
+# --- daemon evaluate(): scope enforcement + repo escape ---------------------
 
 @pytest.fixture
 def daemon(tmp_path, monkeypatch):
@@ -341,7 +343,7 @@ def test_daemon_denies_forbidden_write(daemon):
 
 
 def test_daemon_denies_repo_escape_write(daemon):
-    # F1 defense-in-depth: an absolute path outside the repo is out of scope.
+    # Defense-in-depth: an absolute path outside the repo is out of scope.
     _, d = daemon.evaluate("Write", {"file_path": "/etc/passwd"})
     assert d.decision == DENY
 
@@ -358,7 +360,7 @@ def test_daemon_bash_passthrough_is_benign_only(daemon):
 
 # --- end to end through the REAL daemon server (make_server) + pretooluse.py,
 #     proving the mac the daemon actually attaches is the one the hook accepts
-#     (ADR-0015). Guards against the daemon's _respond wiring regressing. -----
+#     Guards against the daemon's _respond wiring regressing. -----------------
 
 def _real_daemon(tmp_path, secret):
     d = gated.Daemon.__new__(gated.Daemon)
@@ -439,8 +441,8 @@ def test_real_daemon_deny_end_to_end(tmp_path, monkeypatch):
 
 
 def test_hook_blocks_allow_with_empty_secret(tmp_path):
-    # DEFENCE IN DEPTH (ADR-0015 mutation-gate survivor, zti:fix-hookimp round):
-    # the daemon never writes an empty secret (that mutant is killed), but if the
+    # DEFENCE IN DEPTH (a gap mutation testing found): the daemon never writes
+    # an empty secret (that is pinned elsewhere), but if the
     # session file existed yet were EMPTY the "secret" would be the PUBLIC empty
     # key -- an impostor could sign a valid mac with hmac(b"", ...). The `if not
     # secret` guard must treat an empty secret as unreadable and fail CLOSED,

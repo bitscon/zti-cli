@@ -1,4 +1,4 @@
-"""ADR-0010 — full ZTIP execution-receipt conformance + the request→receipt chain.
+"""Full ZTIP execution-receipt conformance + the request→receipt chain.
 
 The library half of the upstream conformance suite (the control-plane ingest
 and evidence-pack halves live in the product tree — no plane ships here).
@@ -92,7 +92,7 @@ def _chain_mint(passing=True, claimed="succeeded", work_id="w-conf", checks=None
 
 def _v1_receipt(work_id="w-v1", status="blocked"):
     """A format-1 receipt, exactly the shape `issue_receipt` minted before
-    ADR-0010, hash-sealed with the unchanged hashing rule. The compatibility
+    full conformance, hash-sealed with the unchanged hashing rule. The compatibility
     contract under test: these must keep verifying forever."""
     envelope = {
         "ztap_version": "1.0-draft",

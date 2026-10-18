@@ -1,9 +1,9 @@
-"""zti:fix-planeapi item 5 — the plane transport policy (ADR-0016).
+"""The plane transport policy.
 
 `ZTI_PLANE_URL` defaulted to plaintext http with no enforcement anywhere, on
-the channel that carries contracts, decisions, escalation releases and — since
-ADR-0015 — the hook session secret. The operator's decision (2026-09-12):
-plaintext http is accepted ONLY to a loopback host; any other plaintext plane
+the channel that carries contracts, decisions, escalation releases and the
+hook's per-session secret. The policy: plaintext http is accepted ONLY to a
+loopback host; any other plaintext plane
 is REFUSED at startup unless `ZTI_ALLOW_INSECURE_HTTP` is set explicitly, in
 which case the client proceeds with a loud warning. https is always accepted.
 
@@ -149,7 +149,7 @@ def default_opener_restored():
 
 def test_daemon_plaintext_bypasses_an_environment_proxy(local_plane, monkeypatch,
                                                         default_opener_restored):
-    """Round finding: urllib's default opener honours http_proxy, so a request
+    """Found in review: urllib's default opener honours http_proxy, so a request
     the policy judged loopback went in plaintext to the proxy address."""
     import urllib.request
     import gated

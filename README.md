@@ -116,8 +116,10 @@ branch protection.
   allow with a missing or wrong HMAC, or a secret the hook cannot read,
   blocks.
 
-Start the daemon beside the repo first, with the Python that has `zti-cli`
-installed (the daemon imports its gate library). At startup it registers with
+Start the daemon beside the repo first. It runs straight from a checkout of
+this repository or from an installed `zti-cli`; either way it needs the open
+`ztip` runtime importable (`pip install zti-cli` brings it in, or
+`pip install ztip` on its own). At startup it registers with
 your plane (set `ZTI_ENROLL_TOKEN` first if the plane requires an enrollment
 token), writes the session secret to `.zti/gated.session` (mode 0600; set
 `ZTI_GATE_SESSION_FILE` to put it elsewhere, and keep it out of version
@@ -147,7 +149,7 @@ with its own `ZTI_GATE_SESSION_FILE`, use that same path here.
 
 ## Upgrading from 0.1.0
 
-0.2.0 is stricter in four ways an existing setup can hit:
+0.2.0 is stricter in three ways an existing setup can hit:
 
 - **A `--contract` that differs from the plane's published policy is refused**
   and nothing mints. Drop `--contract`, or have the operator publish the change.
@@ -158,8 +160,10 @@ with its own `ZTI_GATE_SESSION_FILE`, use that same path here.
 - **The hook pair must be upgraded together**, against a plane that issues the
   per-session secret; an older plane makes the daemon refuse to start. Add
   `ZTI_GATE_SESSION_FILE` to the hook command as shown above.
-- **The daemon needs `zti-cli` installed** in the Python that runs it; running
-  `gated.py` from a bare checkout with nothing installed no longer works.
+
+0.2.0 alone also stopped the daemon starting as a bare script from a checkout
+without `zti-cli` installed. That is fixed in 0.2.1; upgrade rather than work
+around it.
 
 ## What you need to run it
 
@@ -181,8 +185,9 @@ pytest -q
 ```
 
 The suites here cover the gate library, the runtime hook and gate daemon
-client, the `zti` CLI (against a stand-in plane), the plane transport policy,
-and ZTIP conformance. The plane halves of those behaviours, and the full
+client (including starting the daemon as a bare script from a checkout), the
+`zti` CLI (against a stand-in plane), the plane transport policy, and ZTIP
+conformance. The plane halves of those behaviours, and the full
 product battery, run in the ZTI Core tree.
 
 ## License

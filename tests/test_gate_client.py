@@ -7,8 +7,7 @@ the plane becomes one sanitised operator line, never a traceback or a forged
 "enforcing" line, and the enrollment token is never sent malformed or echoed.
 The plane halves of those suites stay in the ZTI Core product tree. Plus the
 daemon's liveness heartbeat and the session file's symlink refusal, pinned
-here because their plane halves live upstream. (The test bodies below are
-carried from the product tree and keep its internal references.)
+here because their plane halves live upstream.
 """
 
 import sys
@@ -296,9 +295,8 @@ def test_the_decision_line_cannot_erase_itself(monkeypatch, capsys):
 
 
 def test_the_daemon_still_routes_its_decision_line_through_the_filter():
-    """The sibling repo pins its gate's WIRING, not just its logic, because a
-    control can be unwired with every suite still green. The same standard applies
-    here: `_decision_line` is tested directly, so nothing else proves the shipped
+    """Pin the gate's WIRING, not just its logic, because a control can be
+    unwired with every suite still green: `_decision_line` is tested directly, so nothing else proves the shipped
     handler still calls it.
 
     Repointed when the handler was lifted out of `main()` into `make_server` so
@@ -323,7 +321,7 @@ def test_the_daemon_still_routes_its_decision_line_through_the_filter():
 
 
 def test_an_unencodable_line_is_degraded_not_dropped():
-    """Round wave 9 (NON-BLOCKING, fixed): swallowing an unencodable line was
+    """Found in review: swallowing an unencodable line was
     quieter than the crash it replaced, and quiet in the wrong direction.
 
     Both mode banners carry an em dash, so on a non-UTF-8 terminal ENFORCING
@@ -365,13 +363,13 @@ def test_an_unencodable_line_is_degraded_not_dropped():
 
 
 def test_every_operator_facing_line_goes_through_the_guard():
-    """Round wave 9: two prints were missed by the sweep that introduced the
+    """Found in review: two prints were missed by the sweep that introduced the
     guard, and one of them mattered — a dead stdout killed the daemon AFTER it
     had registered and pulled its contract, so the plane listed the gate as
     online while nothing was listening on its port. The per-action decision line
     in the request handler was converted but pinned by nothing.
 
-    A source-level pin, in the style of the dashboard wiring tests. It greps
+    A source-level pin. It greps
     this file for the literal token, so it catches a raw print added at module
     level, in a nested function, in a class body or on a continuation line — and
     deliberately not `sys.stdout.write`, an aliased print, or the stdlib's own
@@ -388,12 +386,10 @@ def test_every_operator_facing_line_goes_through_the_guard():
 
 
 def test_the_last_resort_swallow_is_on_the_failure_path():
-    """Round wave 10 (NON-BLOCKING, fixed): the previous wave documented this
-    guard as unreachable and moved the mutation anchor off it. It is reachable —
-    a stream can fail BOTH ways, each half a mode this round has already treated
-    as real: the line is unencodable, and by the time the lossy retry runs the
-    reader is gone. Unguarded, that raises straight out of `evaluate()` and the
-    plane hears nothing about the denial, which is the defect two waves back."""
+    """This guard was once documented as unreachable. It is reachable — a
+    stream can fail BOTH ways: the line is unencodable, and by the time the
+    lossy retry runs the reader is gone. Unguarded, that raises straight out of
+    `evaluate()` and the plane hears nothing about the denial."""
     class FailsBothWays:
         encoding = "ascii"
 

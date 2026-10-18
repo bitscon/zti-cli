@@ -15,3 +15,9 @@
   now also cover the CLI, the daemon client and the transport policy. Open:
   publish 0.2.0, then regenerate the Tier-3 template's verifier pin.
   See `docs/changes/CHANGE-2026-10-16-001-upstream-sync-0.2.0.md`.
+- **2026-10-17**: 0.2.1 prepared (not yet published; 0.2.0 is on PyPI). The
+  hook daemon starts as a bare script from a checkout again, and the shipped
+  files' comments are rewritten in plain language. Re-synced byte-for-byte
+  with the ZTI Core product tree; the mirror's own tests now carry plain
+  wording too. Open: publish 0.2.1, then move the Tier-3 template's verifier
+  pin to it. See `docs/changes/CHANGE-2026-10-17-001-upstream-sync-0.2.1.md`.
