@@ -1,4 +1,4 @@
-# ZTI Tier-3 required check (ADR-0004 §6) — the merge-time receipt-gate.
+# ZTI Tier-3 required check — the merge-time receipt-gate.
 #
 # Copy this file into .github/workflows/ of the GOVERNED repo, then mark the
 # "zti-verify" job as a required status check in branch protection — that is

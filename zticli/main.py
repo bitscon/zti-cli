@@ -1,4 +1,4 @@
-"""zti — the ZTI client CLI (ADR-0004, opened under ADR-0009).
+"""zti — the ZTI client CLI, part of the open ZTI client layer.
 
 Three verbs, one binding model (receipt ↔ git tree hash):
 
@@ -88,7 +88,7 @@ def load_config(root: Path) -> tuple[str, str | None, str | None]:
         except (json.JSONDecodeError, OSError) as exc:
             raise RuntimeError(f"unreadable {cfg_file}: {exc}")
     plane = os.environ.get("ZTI_PLANE_URL") or cfg.get("plane_url") or DEFAULT_PLANE
-    # Transport policy (ADR-0016): plaintext http only to loopback; anything
+    # Transport policy: plaintext http only to loopback; anything
     # else needs https or the explicit ZTI_ALLOW_INSECURE_HTTP override.
     # Raised as RuntimeError so every caller's existing config-error path
     # reports it and exits USAGE, before the first request. Also installs the
@@ -145,7 +145,7 @@ class Plane:
                      authorization: dict | None = None) -> tuple[int, dict]:
         body = {"receipt": receipt, "binding": binding}
         if request is not None:
-            # The ADR-0010 chain: the request + authorization envelopes travel
+            # The ZTIP request chain: the request + authorization envelopes travel
             # with the receipt so the plane can store the provable chain.
             body["request"] = request
             body["authorization"] = authorization
@@ -227,7 +227,7 @@ def _load_contract(args, plane_url: str, gate_id: str | None, key: str | None,
     """Contract source order: plane policy > --contract file > .zti/contract.json.
 
     When the plane publishes a policy for this repo, that policy is the
-    authority (zti:vac-gate): a --contract file may restate it byte-for-byte
+    authority: a --contract file may restate it byte-for-byte
     (offline review copy) but a DIVERGENT local contract is refused — the
     governed party must not swap the operator's checks for weaker ones and
     still mint. With no published policy (404) the local file is the honest
@@ -297,7 +297,7 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         return USAGE
 
     # Unique work unit per content: suffix the lease id with the tree prefix so
-    # every mint gets its own transaction_id/receipt_id (ADR-0004 §2) without
+    # every mint gets its own transaction_id/receipt_id without
     # touching the gate library.
     contract = Contract(
         work_id=f"{spec.get('work_id', 'work')}:{tree[:12]}",
@@ -305,7 +305,7 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         forbidden_paths=list(spec.get("forbidden_paths", [])),
         required_checks=list(spec.get("required_checks", [])),
     )
-    # The ADR-0010 chain: declare the unit of work and its policy basis BEFORE
+    # The ZTIP request chain: declare the unit of work and its policy basis BEFORE
     # the checks run, so the receipt can bind to the request it answers.
     request = build_transaction_request(
         contract, repo=root.name, gate_id=gate_id,
@@ -313,7 +313,7 @@ def cmd_receipt(args: argparse.Namespace) -> int:
     authorization = build_authorization_decision(
         request, policy_ref=policy_ref, gate_id=gate_id)
     gate = Gate(contract)
-    # Mint-time lint (zti:vac-gate): say out loud when a required check is a
+    # Mint-time lint: say out loud when a required check is a
     # constant-true no-op. A warning, never a block — a trivial check an
     # OPERATOR published is their policy choice; the lint exists so nobody
     # mistakes "this ran and passed" for "this verified something".
@@ -342,7 +342,7 @@ def cmd_receipt(args: argparse.Namespace) -> int:
               f"{body.get('reason', '')}) — failing closed", file=sys.stderr)
         return PLANE_UNAVAILABLE
     if accepted and body.get("verified") is not True:
-        # ADR-0013 third outcome: 200, stored and audited, but the plane refused
+        # The plane's third outcome: 200, stored and audited, but the plane refused
         # a verified-done (enforcement was not provably live across the claimed
         # work window). The local checks passing does not override the plane's
         # verdict — printing SUCCEEDED here would assert exactly what the plane
@@ -356,7 +356,7 @@ def cmd_receipt(args: argparse.Namespace) -> int:
         return RECEIPT_NOT_PASSED
 
     # The human verdict word is the gate's (BLOCKED); the receipt's wire status
-    # is the spec's ("failed") — same fact, two vocabularies (ADR-0010).
+    # is the spec's ("failed") — same fact, two vocabularies.
     verdict = "SUCCEEDED" if accepted else "BLOCKED"
     print(f"zti receipt: {verdict} — receipt {body['receipt_id']} bound to "
           f"tree {tree[:12]} ({'commit will pass' if accepted else 'commit stays blocked'})")
@@ -394,7 +394,7 @@ def cmd_install_hooks(args: argparse.Namespace) -> int:
 class _Parser(argparse.ArgumentParser):
     """Usage errors exit USAGE (4). argparse's default is exit 2, which is
     DONE_WITHOUT_RECEIPT in this CLI's contract — a flag typo must never read
-    as "no receipt" to a hook or CI wrapper (ADR-0009 adversarial round)."""
+    as "no receipt" to a hook or CI wrapper (found in review)."""
 
     def error(self, message: str):
         self.print_usage(sys.stderr)

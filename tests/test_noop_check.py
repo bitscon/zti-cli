@@ -26,7 +26,7 @@ from ztipgate.gate import is_noop_check
     "",
     "   ",
     '""',
-    # Constant-true by trailing neutralizer (wave-1 fix): `;`/`|`/`||` all
+    # Constant-true by trailing neutralizer: `;`/`|`/`||` all
     # make the final element's exit the command's exit, so a final no-op
     # makes the whole check unconditionally pass.
     "pytest -q && npm run lint || true",

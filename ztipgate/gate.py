@@ -5,7 +5,7 @@ implement: it governs an agent's work as a leased, contract-bound unit, refuses
 to accept "done" without independently re-verifying it, and stamps a
 hash-chained ZTIP receipt. Fail-closed by construction.
 
-MIT-licensed as part of the open ZTI client gate layer (ADR-0009), published
+MIT-licensed as part of the open ZTI client gate layer, published
 at github.com/bitscon/zti-cli; the commercial ZTI Core product is the closed
 control plane this gate reports to. Depends only on the open `ztip` runtime
 for canonicalization, hashing, and receipts — the money is the license, not
@@ -30,8 +30,7 @@ from typing import Callable
 # on sys.path (ModuleNotFoundError). An installed ztip that exists but fails to
 # import — a broken or half-installed dependency — raises here instead of being
 # silently replaced by whatever checkout the walker finds: the module that
-# seals receipts is never swapped behind a working install (ADR-0009 round,
-# wave 2; narrowed per the zti:truth registered follow-up).
+# seals receipts is never swapped behind a working install (found in review).
 try:
     from ztip.hashing import CANONICALIZATION, HASH_ALGORITHM, envelope_hash
 except ModuleNotFoundError:
@@ -162,7 +161,7 @@ def is_irreversible(command: str) -> bool:
     return False
 
 
-# Constant-true check classification (zti:vac-gate). A "check" that always
+# Constant-true check classification. A "check" that always
 # exits 0 while verifying nothing — `true`, `:`, a bare `echo`/`printf`,
 # `exit 0`, or a real command neutered by a trailing `|| true` — produces a
 # named, passing verification result that every honest floor accepts by
@@ -259,22 +258,22 @@ class Decision:
     detail: str
 
 
-# ── ZTIP chain envelopes (ADR-0010) ─────────────────────────────────────────
+# ── ZTIP chain envelopes ────────────────────────────────────────────────────
 # The open spec's request→receipt chain: a transaction_request declares the
 # unit of work and its verification requirements BEFORE execution; an
 # authorization_decision records the policy basis; the execution receipt binds
 # to both by hash/ref. All three are built CLIENT-SIDE from artifacts that
 # already exist (the governing contract, the operator-published policy).
 #
-# ZTIP role mapping (ADR-0010): the GATE is the ZTIP `control_plane` — it
+# ZTIP role mapping: the GATE is the ZTIP `control_plane` — it
 # evaluates the request against the operator's published policy, authorizes,
-# and independently verifies completion (exactly the local authority ADR-0001
-# defines). The workspace/agent is BOTH `source_actor` (it requests the work)
+# and independently verifies completion (exactly the local authority the design
+# gives it). The workspace/agent is BOTH `source_actor` (it requests the work)
 # and `target_actor` (it executes it) — honest, since a coding agent plans and
-# executes its own change, and agent-neutral (ADR-0004: the receipt names the
+# executes its own change, and agent-neutral (the receipt names the
 # workspace, never a specific agent). The zti-core plane is the ZTIP audit
 # ledger (retain the trail), NOT the control_plane — it is never in the
-# evaluation path (ADR-0001/0002).
+# evaluation path.
 
 ZTIP_VERSION = "1.0-draft"  # the spec's common-envelope const; `ztap_version` is its field name
 
@@ -442,7 +441,7 @@ def build_authorization_decision(request: dict, *, policy_ref: str,
     request against the operator-published policy named in `policy_ref` — a
     plane policy etag, or the contract's own content hash offline. The zti-core
     plane (the audit ledger) is NOT the evaluator and is never in the evaluation
-    path (ADR-0001/0002); the `notes` field states this. The short expiry scopes
+    path; the `notes` field states this. The short expiry scopes
     the authorization to this certification run."""
     when = _normalize_ts(evaluated_at) if evaluated_at else _utc_now_iso()
     expires = (datetime.fromisoformat(when) + timedelta(minutes=15)).isoformat()
@@ -632,7 +631,7 @@ class Gate:
         recent matching block is released — one approval, one action.
 
         The gate does not decide this. It is told, by the plane, that the
-        operator decided it (ADR-0014): the release is authority the gate
+        operator decided it: the release is authority the gate
         consumes and never authors.
         """
         summary = self._summary(action)
@@ -735,7 +734,7 @@ class Gate:
                       *, request: dict | None = None,
                       authorization: dict | None = None) -> dict:
         """Mint the execution receipt — format 2, full ZTIP execution-receipt
-        conformance (ADR-0010).
+        conformance.
 
         Every execution receipt answers a request: the spec has no chain-less
         receipt (`request_hash` and `authorization_decision_ref` are required on
